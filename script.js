@@ -1071,17 +1071,22 @@ async function handleFileChunk(data) {
     }
 
     try {
-        // Store chunk in IndexedDB for streaming download
-        await storeFileChunk(data.fileId, data.data, chunkIndex);
-        
-        // Also store in local array for immediate access
+        // Store in local array FIRST for immediate access
         if (!fileData.chunks) {
             fileData.chunks = [];
         }
         fileData.chunks[chunkIndex] = data.data;
         
+        // Update received size IMMEDIATELY
         const previousSize = fileData.receivedSize || 0;
         fileData.receivedSize = previousSize + data.data.byteLength;
+        
+        console.log(`Chunk ${chunkIndex} stored IMMEDIATELY, received: ${fileData.receivedSize}/${fileData.fileSize} (added ${data.data.byteLength})`);
+        
+        // Store chunk in IndexedDB for streaming download (async, but don't wait)
+        storeFileChunk(data.fileId, data.data, chunkIndex).catch(error => {
+            console.error('Error storing chunk in IndexedDB:', error);
+        });
         
         // Update progress
         const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
@@ -1090,7 +1095,6 @@ async function handleFileChunk(data) {
             fileData.lastProgressUpdate = currentProgress;
         }
         
-        console.log(`Chunk ${chunkIndex} stored, received: ${fileData.receivedSize}/${fileData.fileSize} (added ${data.data.byteLength})`);
         console.log(`File data state:`, {
             fileId: data.fileId,
             receivedSize: fileData.receivedSize,
@@ -1116,6 +1120,9 @@ async function handleFileComplete(data) {
     }
 
     try {
+        // Add a small delay to ensure all chunks are processed
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
         console.log(`File complete: ${fileData.fileName}, expected: ${fileData.fileSize}, received: ${fileData.receivedSize}`);
         console.log(`File data state at completion:`, {
             fileId: data.fileId,
