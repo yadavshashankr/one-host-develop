@@ -617,16 +617,27 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
             throw new Error('File System Access API not supported');
         }
         
-        // Let user choose download location
-        const fileHandle = await window.showSaveFilePicker({
-            suggestedName: fileName,
-            types: [{
+        // Let user choose download location with proper file type handling
+        const fileExtension = fileName.split('.').pop() || '';
+        const validFileType = fileType && fileType !== '' ? fileType : 'application/octet-stream';
+        
+        console.log(`File picker config: fileName=${fileName}, fileType=${validFileType}, extension=${fileExtension}`);
+        
+        const pickerOptions = {
+            suggestedName: fileName
+        };
+        
+        // Only add types if we have a valid file type
+        if (validFileType && validFileType !== 'application/octet-stream') {
+            pickerOptions.types = [{
                 description: 'File',
                 accept: {
-                    [fileType]: [`.${fileName.split('.').pop()}`]
+                    [validFileType]: [`.${fileExtension}`]
                 }
-            }]
-        });
+            }];
+        }
+        
+        const fileHandle = await window.showSaveFilePicker(pickerOptions);
 
         const writable = await fileHandle.createWritable();
         
@@ -681,6 +692,14 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
             console.log('User cancelled file download');
             showNotification('Download cancelled by user', 'info');
             return false; // Return false instead of throwing
+        }
+        
+        // Handle invalid type errors
+        if (error.message.includes('Invalid type')) {
+            console.error('Invalid file type for picker:', { fileType, fileName });
+            showNotification('File type not supported by browser, using fallback download', 'warning');
+            // Fall back to native download method
+            return await downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSize);
         }
         
         throw error;
