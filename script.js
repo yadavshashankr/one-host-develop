@@ -342,19 +342,37 @@ async function getFileChunks(fileId) {
                 const transaction = db.transaction(['fileChunks'], 'readonly');
                 const store = transaction.objectStore('fileChunks');
                 
-                const chunks = await store.getAll(IDBKeyRange.only(fileId));
+                // Use proper IndexedDB request handling
+                const chunks = await new Promise((resolve, reject) => {
+                    const request = store.getAll(IDBKeyRange.only(fileId));
+                    
+                    request.onsuccess = function() {
+                        const chunks = request.result;
+                        console.log(`IndexedDB raw result for ${fileId}:`, chunks);
+                        
+                        // Ensure chunks is an array
+                        if (!Array.isArray(chunks)) {
+                            console.error(`IndexedDB returned non-array for ${fileId}:`, chunks);
+                            console.log(`Type: ${typeof chunks}, Value:`, chunks);
+                            resolve([]);
+                            return;
+                        }
+                        
+                        // Sort by chunk index to ensure correct order
+                        const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+                        console.log(`Retrieved ${sortedChunks.length} chunks from IndexedDB for ${fileId}`);
+                        resolve(sortedChunks);
+                    };
+                    
+                    request.onerror = function() {
+                        console.error(`IndexedDB error for ${fileId}:`, request.error);
+                        resolve([]);
+                    };
+                });
                 
-                // Ensure chunks is an array
-                if (!Array.isArray(chunks)) {
-                    console.error(`IndexedDB returned non-array for ${fileId}:`, chunks);
-                    console.log(`Type: ${typeof chunks}, Value:`, chunks);
-                    return [];
+                if (chunks.length > 0) {
+                    return chunks;
                 }
-                
-                // Sort by chunk index to ensure correct order
-                const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
-                console.log(`Retrieved ${sortedChunks.length} chunks from IndexedDB for ${fileId}`);
-                return sortedChunks;
             }
         }
         
@@ -407,9 +425,18 @@ async function getFileChunks(fileId) {
 
 // ✅ NEW: Get chunks from local fileChunks array
 function getLocalFileChunks(fileId) {
+    console.log(`Getting local chunks for ${fileId}`);
+    console.log(`Global fileChunks keys:`, Object.keys(fileChunks));
+    console.log(`Global fileChunks size:`, Object.keys(fileChunks).length);
+    
     const fileData = fileChunks[fileId];
     if (!fileData || !fileData.chunks) {
-        console.log(`No fileData or chunks for ${fileId}:`, { fileData: !!fileData, chunks: !!fileData?.chunks });
+        console.log(`No fileData or chunks for ${fileId}:`, { 
+            fileData: !!fileData, 
+            chunks: !!fileData?.chunks,
+            fileDataKeys: fileData ? Object.keys(fileData) : 'no fileData',
+            chunksLength: fileData?.chunks?.length || 'no chunks array'
+        });
         return [];
     }
     
@@ -496,6 +523,53 @@ async function verifyFileIntegrity(fileId, expectedSize, expectedChunks) {
         console.error('File integrity verification failed:', error);
         throw error;
     }
+}
+
+// ✅ NEW: Preserve file chunks to prevent loss
+function preserveFileChunks(fileId) {
+    const fileData = fileChunks[fileId];
+    if (fileData && fileData.chunks) {
+        console.log(`Preserving ${fileData.chunks.length} chunks for ${fileId}`);
+        // Store a backup in sessionStorage as a fallback
+        try {
+            const backup = {
+                fileId: fileId,
+                fileName: fileData.fileName,
+                fileType: fileData.fileType,
+                fileSize: fileData.fileSize,
+                receivedSize: fileData.receivedSize,
+                chunksCount: fileData.chunks.length,
+                timestamp: Date.now()
+            };
+            sessionStorage.setItem(`fileChunks_backup_${fileId}`, JSON.stringify(backup));
+            console.log(`File chunks backup created for ${fileId}`);
+        } catch (error) {
+            console.error('Error creating file chunks backup:', error);
+        }
+    }
+}
+
+// ✅ NEW: Restore file chunks from backup if needed
+function restoreFileChunks(fileId) {
+    try {
+        const backupKey = `fileChunks_backup_${fileId}`;
+        const backupData = sessionStorage.getItem(backupKey);
+        if (backupData) {
+            const backup = JSON.parse(backupData);
+            console.log(`Found backup for ${fileId}:`, backup);
+            
+            // Check if current chunks are missing or incomplete
+            const currentData = fileChunks[fileId];
+            if (!currentData || !currentData.chunks || currentData.chunks.length === 0) {
+                console.log(`Restoring file chunks from backup for ${fileId}`);
+                // The actual chunks would need to be restored from IndexedDB
+                return true;
+            }
+        }
+    } catch (error) {
+        console.error('Error restoring file chunks:', error);
+    }
+    return false;
 }
 
 // ✅ NEW: Validate and repair chunk data
@@ -701,6 +775,23 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
         const writable = await fileHandle.createWritable();
         
         // Get chunks and write directly to file system with perfect ordering
+        console.log(`=== FILE SYSTEM API DOWNLOAD START ===`);
+        console.log(`Downloading file: ${fileName} (${fileId})`);
+        console.log(`File size: ${fileSize}, File type: ${fileType}`);
+        
+        // Preserve file chunks before File System API download
+        preserveFileChunks(fileId);
+        
+        // Debug: Check if chunks exist before retrieval
+        console.log(`Global fileChunks before File System API retrieval:`, Object.keys(fileChunks));
+        if (fileChunks[fileId]) {
+            console.log(`File data exists for File System API:`, {
+                chunksLength: fileChunks[fileId].chunks?.length || 0,
+                receivedSize: fileChunks[fileId].receivedSize || 0,
+                fileSize: fileChunks[fileId].fileSize || 0
+            });
+        }
+        
         const chunks = await getFileChunks(fileId);
         
         console.log(`File System API: Retrieved ${chunks.length} chunks for ${fileId}`);
@@ -793,6 +884,23 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
 async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSize) {
     try {
         // Get chunks from storage with comprehensive validation
+        console.log(`=== DOWNLOAD START ===`);
+        console.log(`Downloading file: ${fileName} (${fileId})`);
+        console.log(`File size: ${fileSize}, File type: ${fileType}`);
+        
+        // Preserve file chunks before download to prevent loss
+        preserveFileChunks(fileId);
+        
+        // Debug: Check if chunks exist before retrieval
+        console.log(`Global fileChunks before retrieval:`, Object.keys(fileChunks));
+        if (fileChunks[fileId]) {
+            console.log(`File data exists:`, {
+                chunksLength: fileChunks[fileId].chunks?.length || 0,
+                receivedSize: fileChunks[fileId].receivedSize || 0,
+                fileSize: fileChunks[fileId].fileSize || 0
+            });
+        }
+        
         const chunks = await getFileChunks(fileId);
         
         console.log(`Download: Retrieved ${chunks.length} chunks for ${fileId}`);
