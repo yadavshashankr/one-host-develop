@@ -420,20 +420,30 @@ function getLocalFileChunks(fileId) {
         definedChunks: fileData.chunks.filter(c => c !== undefined).length
     });
     
-    // Convert to the same format as IndexedDB chunks
+    // Convert to the same format as IndexedDB chunks with proper validation
     const result = fileData.chunks
-        .filter(chunk => chunk !== undefined)
-        .map((chunk, index) => ({
-            fileId: fileId,
-            chunkData: chunk,
-            chunkIndex: index,
-            chunkSize: chunk.byteLength,
-            timestamp: Date.now(),
-            metadata: {
-                originalSize: chunk.byteLength,
-                chunkOrder: index
+        .map((chunk, index) => {
+            if (chunk === undefined) {
+                console.warn(`Missing chunk at index ${index} for ${fileId}`);
+                return null;
             }
-        }));
+            if (!chunk || typeof chunk.byteLength === 'undefined') {
+                console.error(`Invalid chunk at index ${index} for ${fileId}:`, chunk);
+                return null;
+            }
+            return {
+                fileId: fileId,
+                chunkData: chunk,
+                chunkIndex: index,
+                chunkSize: chunk.byteLength,
+                timestamp: Date.now(),
+                metadata: {
+                    originalSize: chunk.byteLength,
+                    chunkOrder: index
+                }
+            };
+        })
+        .filter(chunk => chunk !== null);
     
     console.log(`Converted ${result.length} local chunks for ${fileId}`);
     return result;
@@ -485,6 +495,55 @@ async function verifyFileIntegrity(fileId, expectedSize, expectedChunks) {
     } catch (error) {
         console.error('File integrity verification failed:', error);
         throw error;
+    }
+}
+
+// ✅ NEW: Validate and repair chunk data
+async function validateAndRepairChunks(fileId, expectedSize) {
+    try {
+        const chunks = await getFileChunks(fileId);
+        
+        if (chunks.length === 0) {
+            console.error(`No chunks found for validation: ${fileId}`);
+            return false;
+        }
+        
+        console.log(`Validating ${chunks.length} chunks for ${fileId}`);
+        
+        // Check for missing chunks
+        const chunkIndices = chunks.map(c => c.chunkIndex).sort((a, b) => a - b);
+        const expectedIndices = Array.from({ length: chunks.length }, (_, i) => i);
+        
+        const missingIndices = expectedIndices.filter(i => !chunkIndices.includes(i));
+        if (missingIndices.length > 0) {
+            console.error(`Missing chunk indices: ${missingIndices.join(', ')}`);
+            return false;
+        }
+        
+        // Check total size
+        let totalSize = 0;
+        for (const chunk of chunks) {
+            if (!chunk.chunkData || typeof chunk.chunkData.byteLength === 'undefined') {
+                console.error(`Invalid chunk at index ${chunk.chunkIndex}`);
+                return false;
+            }
+            totalSize += chunk.chunkData.byteLength;
+        }
+        
+        const sizeDifference = Math.abs(totalSize - expectedSize);
+        const tolerance = Math.max(1024, expectedSize * 0.001); // 1KB or 0.1% tolerance
+        
+        if (sizeDifference > tolerance) {
+            console.error(`Size mismatch: expected ${expectedSize}, got ${totalSize} (difference: ${sizeDifference})`);
+            return false;
+        }
+        
+        console.log(`Chunk validation successful: ${chunks.length} chunks, ${totalSize} bytes`);
+        return true;
+        
+    } catch (error) {
+        console.error('Chunk validation failed:', error);
+        return false;
     }
 }
 
@@ -644,8 +703,32 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
         // Get chunks and write directly to file system with perfect ordering
         const chunks = await getFileChunks(fileId);
         
+        console.log(`File System API: Retrieved ${chunks.length} chunks for ${fileId}`);
+        console.log(`File System API: Chunk details:`, chunks.map(c => ({
+            index: c.chunkIndex,
+            size: c.chunkData?.byteLength,
+            valid: c.chunkData && typeof c.chunkData.byteLength === 'number'
+        })));
+        
+        if (chunks.length === 0) {
+            throw new Error('No file chunks found for File System API download');
+        }
+        
+        // Validate all chunks have valid data
+        const invalidChunks = chunks.filter(c => !c.chunkData || typeof c.chunkData.byteLength === 'undefined');
+        if (invalidChunks.length > 0) {
+            console.error(`File System API: Found ${invalidChunks.length} invalid chunks:`, invalidChunks);
+            throw new Error(`Found ${invalidChunks.length} invalid chunks - file may be corrupted`);
+        }
+        
         // Sort chunks by index for perfect order
         chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        
+        // Validate chunks before writing
+        const isValid = await validateAndRepairChunks(fileId, fileSize);
+        if (!isValid) {
+            throw new Error('File chunks validation failed for File System API - file may be corrupted or incomplete');
+        }
         
         console.log(`File System API: Writing ${chunks.length} chunks, expected size: ${fileSize}`);
         
@@ -709,11 +792,31 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
 // ✅ NEW: Native download with chunked blob (works on ALL devices)
 async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSize) {
     try {
-        // Get chunks from IndexedDB
+        // Get chunks from storage with comprehensive validation
         const chunks = await getFileChunks(fileId);
+        
+        console.log(`Download: Retrieved ${chunks.length} chunks for ${fileId}`);
+        console.log(`Download: Chunk details:`, chunks.map(c => ({
+            index: c.chunkIndex,
+            size: c.chunkData?.byteLength,
+            valid: c.chunkData && typeof c.chunkData.byteLength === 'number'
+        })));
         
         if (chunks.length === 0) {
             throw new Error('No file chunks found');
+        }
+        
+        // Validate all chunks have valid data
+        const invalidChunks = chunks.filter(c => !c.chunkData || typeof c.chunkData.byteLength === 'undefined');
+        if (invalidChunks.length > 0) {
+            console.error(`Found ${invalidChunks.length} invalid chunks:`, invalidChunks);
+            throw new Error(`Found ${invalidChunks.length} invalid chunks - file may be corrupted`);
+        }
+        
+        // Validate chunks before reassembly
+        const isValid = await validateAndRepairChunks(fileId, fileSize);
+        if (!isValid) {
+            throw new Error('File chunks validation failed - file may be corrupted or incomplete');
         }
         
         // Verify file integrity before reassembly
@@ -787,8 +890,8 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
         // Clean up
         setTimeout(() => {
             URL.revokeObjectURL(url);
-            // Clear blobs from memory
-            allBlobs.length = 0;
+            // Clear chunk buffers from memory
+            chunkBuffers.length = 0;
         }, 1000);
         
         // Verify file integrity
@@ -1345,8 +1448,10 @@ async function handleFileChunk(data) {
     console.log(`Raw data received:`, data);
     
     // Calculate chunk index from offset if not provided (backward compatibility)
+    // Use 256KB chunks to match the sender's chunk size
+    const chunkSize = 256 * 1024; // 256KB chunks
     const chunkIndex = data.chunkIndex !== undefined ? data.chunkIndex : 
-                      (data.offset !== undefined ? Math.floor(data.offset / (64 * 1024)) : 0);
+                      (data.offset !== undefined ? Math.floor(data.offset / chunkSize) : 0);
     
     console.log(`Received chunk for ${data.fileId}, index: ${chunkIndex}, size: ${data.data?.byteLength || 0}, offset: ${data.offset || 'N/A'}`);
     console.log(`Global fileChunks keys:`, Object.keys(fileChunks));
