@@ -1247,18 +1247,31 @@ async function handleFileComplete(data) {
             throw new Error(`Size mismatch: expected ${fileData.fileSize}, got ${fileData.receivedSize}`);
         }
 
-        // ✅ Download using universal streaming method
-        await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
+        // ✅ Show download button instead of auto-downloading (browser security requirement)
+        console.log(`File download ready: ${fileData.fileName} (${fileData.fileSize} bytes)`);
+        showNotification(`${fileData.fileName} ready for download`, 'success');
         
-        // Update UI
+        // Update UI to show download button
         const listItem = document.querySelector(`[data-file-id="${data.fileId}"]`);
         if (listItem) {
-            listItem.classList.add('download-completed');
+            listItem.classList.add('download-ready');
             const downloadButton = listItem.querySelector('.icon-button');
             if (downloadButton) {
-                downloadButton.classList.add('download-completed');
-                downloadButton.innerHTML = '<span class="material-icons">check</span>';
-                downloadButton.title = 'Download completed';
+                downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                downloadButton.title = 'Click to download file';
+                downloadButton.onclick = async () => {
+                    try {
+                        await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
+                        // Update UI after successful download
+                        listItem.classList.remove('download-ready');
+                        listItem.classList.add('download-completed');
+                        downloadButton.innerHTML = '<span class="material-icons">check</span>';
+                        downloadButton.title = 'Download completed';
+                    } catch (error) {
+                        console.error('Download failed:', error);
+                        showNotification(`Download failed: ${error.message}`, 'error');
+                    }
+                };
             }
         }
 
