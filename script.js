@@ -766,21 +766,20 @@ async function sendFileStreaming(file, conn, fileId) {
                 });
                 
                 // Validate chunk - use size for Blob objects, byteLength for File objects
-                const chunkSize = chunk.size || chunk.byteLength;
+                const actualChunkSize = chunk.size || chunk.byteLength;
                 console.log(`Chunk size calculation:`, {
-                    chunkSize: chunkSize,
-                    chunkSize: chunkSize,
-                    chunkSizeType: typeof chunkSize,
+                    actualChunkSize: actualChunkSize,
+                    actualChunkSizeType: typeof actualChunkSize,
                     size: chunk?.size,
                     byteLength: chunk?.byteLength
                 });
                 
-                if (!chunk || typeof chunkSize === 'undefined') {
+                if (!chunk || typeof actualChunkSize === 'undefined') {
                     console.error(`Chunk validation failed:`, {
                         chunk: chunk,
                         size: chunk?.size,
                         byteLength: chunk?.byteLength,
-                        type: typeof chunkSize
+                        type: typeof actualChunkSize
                     });
                     throw new Error(`Invalid chunk created at offset ${offset}`);
                 }
@@ -788,7 +787,7 @@ async function sendFileStreaming(file, conn, fileId) {
                 const arrayBuffer = await chunk.arrayBuffer();
                 const chunkIndex = Math.floor(offset / chunkSize);
 
-                console.log(`Sending chunk ${chunkIndex}: offset=${offset}, size=${chunkSize}, total=${file.size}, connection open: ${conn.open}`);
+                console.log(`Sending chunk ${chunkIndex}: offset=${offset}, size=${actualChunkSize}, total=${file.size}, connection open: ${conn.open}`);
 
                 conn.send({
                     type: 'file-chunk',
@@ -799,7 +798,7 @@ async function sendFileStreaming(file, conn, fileId) {
                     total: file.size
                 });
 
-                offset += chunkSize;
+                offset += actualChunkSize;
                 chunkCount++;
 
                 console.log(`Chunk ${chunkIndex} sent successfully, new offset: ${offset}`);
