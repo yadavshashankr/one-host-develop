@@ -549,6 +549,85 @@ function preserveFileChunks(fileId) {
     }
 }
 
+// ✅ NEW: Check if file was actually received
+function checkIfFileWasReceived(fileId, fileName) {
+    console.log(`=== FILE RECEIPT CHECK ===`);
+    console.log(`Checking if file was received: ${fileName} (${fileId})`);
+    
+    // Check if file exists in received files list
+    const receivedFilesList = document.querySelector('.files-list');
+    if (receivedFilesList) {
+        const fileItems = receivedFilesList.querySelectorAll('li');
+        console.log(`Found ${fileItems.length} items in received files list`);
+        
+        fileItems.forEach((item, index) => {
+            const itemFileId = item.getAttribute('data-file-id');
+            const itemFileName = item.querySelector('.file-name')?.textContent;
+            console.log(`Item ${index}: fileId="${itemFileId}", name="${itemFileName}"`);
+            
+            if (itemFileId === fileId) {
+                console.log(`✅ File found in received files list: ${fileName}`);
+            }
+        });
+    } else {
+        console.log(`No received files list found`);
+    }
+    
+    // Check if file was added to history
+    console.log(`Checking file history...`);
+    // This would need access to the file history storage
+}
+
+// ✅ NEW: List all available files for debugging
+function listAllAvailableFiles() {
+    console.log(`=== AVAILABLE FILES DEBUG ===`);
+    console.log(`Global fileChunks:`, Object.keys(fileChunks));
+    console.log(`Global fileChunks count:`, Object.keys(fileChunks).length);
+    
+    // List all files in global storage
+    Object.keys(fileChunks).forEach(fileId => {
+        const fileData = fileChunks[fileId];
+        console.log(`File: ${fileId}`, {
+            fileName: fileData.fileName || 'unknown',
+            fileSize: fileData.fileSize || 0,
+            receivedSize: fileData.receivedSize || 0,
+            chunksLength: fileData.chunks?.length || 0,
+            hasChunks: !!fileData.chunks,
+            chunksArray: Array.isArray(fileData.chunks)
+        });
+    });
+    
+    // Check IndexedDB for files
+    if (isIndexedDBSupported()) {
+        initIndexedDB().then(db => {
+            if (db) {
+                const transaction = db.transaction(['fileChunks'], 'readonly');
+                const store = transaction.objectStore('fileChunks');
+                const request = store.getAll();
+                
+                request.onsuccess = function() {
+                    const allChunks = request.result;
+                    console.log(`IndexedDB total chunks:`, allChunks.length);
+                    
+                    // Group by fileId
+                    const filesInIndexedDB = {};
+                    allChunks.forEach(chunk => {
+                        if (!filesInIndexedDB[chunk.fileId]) {
+                            filesInIndexedDB[chunk.fileId] = [];
+                        }
+                        filesInIndexedDB[chunk.fileId].push(chunk);
+                    });
+                    
+                    console.log(`Files in IndexedDB:`, Object.keys(filesInIndexedDB));
+                    Object.keys(filesInIndexedDB).forEach(fileId => {
+                        console.log(`IndexedDB File: ${fileId} - ${filesInIndexedDB[fileId].length} chunks`);
+                    });
+                };
+            }
+        });
+    }
+}
+
 // ✅ NEW: Restore file chunks from backup if needed
 function restoreFileChunks(fileId) {
     try {
@@ -802,6 +881,9 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
         })));
         
         if (chunks.length === 0) {
+            console.error(`No chunks found for ${fileId} - running debug`);
+            checkIfFileWasReceived(fileId, fileName);
+            listAllAvailableFiles();
             throw new Error('No file chunks found for File System API download');
         }
         
@@ -893,12 +975,31 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
         
         // Debug: Check if chunks exist before retrieval
         console.log(`Global fileChunks before retrieval:`, Object.keys(fileChunks));
+        console.log(`All available fileIds:`, Object.keys(fileChunks));
+        console.log(`Looking for fileId: ${fileId}`);
+        
+        // Check if the fileId exists in the global storage
+        const availableFileIds = Object.keys(fileChunks);
+        const fileIdExists = availableFileIds.includes(fileId);
+        console.log(`FileId exists in global storage: ${fileIdExists}`);
+        
         if (fileChunks[fileId]) {
             console.log(`File data exists:`, {
                 chunksLength: fileChunks[fileId].chunks?.length || 0,
                 receivedSize: fileChunks[fileId].receivedSize || 0,
-                fileSize: fileChunks[fileId].fileSize || 0
+                fileSize: fileChunks[fileId].fileSize || 0,
+                fileName: fileChunks[fileId].fileName || 'unknown'
             });
+        } else {
+            console.error(`File data NOT found for ${fileId}`);
+            console.error(`Available fileIds:`, availableFileIds);
+            
+            // Check if there's a similar fileId (maybe case sensitivity issue)
+            const similarFileIds = availableFileIds.filter(id => 
+                id.toLowerCase().includes(fileId.toLowerCase().split('-')[0]) ||
+                id.toLowerCase().includes(fileName.toLowerCase().replace(/\s+/g, ''))
+            );
+            console.log(`Similar fileIds found:`, similarFileIds);
         }
         
         const chunks = await getFileChunks(fileId);
@@ -911,6 +1012,12 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
         })));
         
         if (chunks.length === 0) {
+            throw new Error('No file chunks found');
+        }
+        
+        if (chunks.length === 0) {
+            console.error(`No chunks found for ${fileId} - running debug`);
+            listAllAvailableFiles();
             throw new Error('No file chunks found');
         }
         
@@ -1025,6 +1132,8 @@ async function downloadWithDataURL(fileId, fileName, fileType, fileSize) {
         const chunks = await getFileChunks(fileId);
         
         if (chunks.length === 0) {
+            console.error(`No chunks found for ${fileId} - running debug`);
+            listAllAvailableFiles();
             throw new Error('No file chunks found');
         }
         
