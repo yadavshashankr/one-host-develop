@@ -564,6 +564,62 @@ function checkFileTransferStatus(fileId, fileName) {
         return false;
     }
     
+    // Check connection quality
+    activeConnections.forEach((conn, index) => {
+        console.log(`Connection ${index}:`, {
+            peer: conn.peer,
+            open: conn.open,
+            readyState: conn.connectionState || 'unknown',
+            bufferedAmount: conn.bufferedAmount || 'unknown'
+        });
+    });
+    
+    // Check if the file was ever in the transfer queue
+    console.log(`Checking if file was in transfer queue...`);
+    
+    // Check if there are any recent file transfer activities
+    const recentActivity = sessionStorage.getItem('recentFileTransfers');
+    if (recentActivity) {
+        console.log(`Recent file transfer activity:`, recentActivity);
+        
+        // Parse and analyze the activity
+        try {
+            const activities = JSON.parse(recentActivity);
+            const fileActivities = activities.filter(a => a.fileId === fileId);
+            console.log(`Activities for this file:`, fileActivities);
+            
+            // Check if chunks were received
+            const chunkActivities = fileActivities.filter(a => a.action === 'file-chunk-received');
+            console.log(`Chunk reception count: ${chunkActivities.length}`);
+            
+            if (chunkActivities.length === 0) {
+                console.error(`No chunks were received for this file!`);
+                showNotification('File chunks were not received. This may indicate a network issue.', 'error');
+            } else {
+                console.log(`Received ${chunkActivities.length} chunks for this file`);
+            }
+        } catch (error) {
+            console.error('Error parsing recent activity:', error);
+        }
+    } else {
+        console.log(`No recent file transfer activity found`);
+    }
+    
+    return true;
+}
+    console.log(`=== FILE TRANSFER STATUS CHECK ===`);
+    console.log(`Checking transfer status for: ${fileName} (${fileId})`);
+    
+    // Check if there are any active connections
+    const activeConnections = Array.from(connections.values()).filter(conn => conn.open);
+    console.log(`Active connections: ${activeConnections.length}`);
+    
+    if (activeConnections.length === 0) {
+        console.warn(`No active connections found - file transfer may have failed`);
+        showNotification('No active connection found. Please ensure both devices are connected.', 'warning');
+        return false;
+    }
+    
     // Check if the file was ever in the transfer queue
     console.log(`Checking if file was in transfer queue...`);
     
@@ -1603,6 +1659,17 @@ function setupConnectionHandlers(conn) {
                     await handleFileHeader(data);
                     break;
                 case 'file-chunk':
+                    console.log(`=== FILE CHUNK RECEIVED ===`);
+                    console.log(`Received file chunk:`, {
+                        fileId: data.fileId,
+                        chunkIndex: data.chunkIndex,
+                        dataSize: data.data?.byteLength || 0,
+                        offset: data.offset || 'N/A'
+                    });
+                    
+                    // Track chunk reception
+                    trackFileTransferActivity('file-chunk-received', data.fileId, `chunk-${data.chunkIndex}`);
+                    
                     await handleFileChunk(data);
                     break;
                 case 'file-complete':
