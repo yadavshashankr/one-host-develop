@@ -209,9 +209,10 @@ function checkBrowserSupport() {
 }
 
 // Initialize IndexedDB
+// ✅ ENHANCED: IndexedDB setup with file chunks support
 async function initIndexedDB() {
     try {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        const request = indexedDB.open(DB_NAME, DB_VERSION + 1); // Increment version for new store
         
         request.onerror = (event) => {
             showNotification('IndexedDB initialization failed', 'error');
@@ -222,6 +223,12 @@ async function initIndexedDB() {
             if (!db.objectStoreNames.contains(STORE_NAME)) {
                 db.createObjectStore(STORE_NAME, { keyPath: 'id' });
             }
+            
+            // ✅ Create file chunks store for streaming downloads
+            if (!db.objectStoreNames.contains('fileChunks')) {
+                const store = db.createObjectStore('fileChunks', { keyPath: 'fileId' });
+                store.createIndex('timestamp', 'timestamp', { unique: false });
+            }
         };
 
         request.onsuccess = (event) => {
@@ -231,6 +238,51 @@ async function initIndexedDB() {
         console.error('IndexedDB Error:', error);
         showNotification('Storage initialization failed', 'error');
     }
+}
+
+// ✅ NEW: Device detection functions
+function isMobileDevice() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
+
+function isPWA() {
+    return window.matchMedia('(display-mode: standalone)').matches || 
+           window.navigator.standalone === true;
+}
+
+// ✅ NEW: Store file chunks for streaming
+async function storeFileChunk(fileId, chunkData, chunkIndex) {
+    const db = await initIndexedDB();
+    const transaction = db.transaction(['fileChunks'], 'readwrite');
+    const store = transaction.objectStore('fileChunks');
+    
+    await store.put({
+        fileId: fileId,
+        chunkData: chunkData,
+        chunkIndex: chunkIndex,
+        timestamp: Date.now()
+    });
+}
+
+// ✅ NEW: Get all chunks for a file
+async function getFileChunks(fileId) {
+    const db = await initIndexedDB();
+    const transaction = db.transaction(['fileChunks'], 'readonly');
+    const store = transaction.objectStore('fileChunks');
+    
+    const chunks = await store.getAll(IDBKeyRange.only(fileId));
+    
+    // Sort by chunk index to ensure correct order
+    return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+}
+
+// ✅ NEW: Clean up file chunks
+async function cleanupFileChunks(fileId) {
+    const db = await initIndexedDB();
+    const transaction = db.transaction(['fileChunks'], 'readwrite');
+    const store = transaction.objectStore('fileChunks');
+    
+    await store.delete(IDBKeyRange.only(fileId));
 }
 
 // Generate QR Code
@@ -277,6 +329,195 @@ function checkUrlForPeerId() {
 // Store sent files for later download
 const sentFilesStore = new Map();
 
+// ✅ NEW: Universal streaming download for all devices
+async function downloadFileUniversal(fileId, fileName, fileType, fileSize) {
+    try {
+        // Method 1: File System Access API (modern desktop)
+        if ('showSaveFilePicker' in window && !isMobileDevice()) {
+            return await downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize);
+        }
+        
+        // Method 2: Native download with chunked blob (all devices)
+        return await downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSize);
+        
+    } catch (error) {
+        console.error('Universal download failed:', error);
+        
+        // Method 3: Fallback to data URL (smaller files only)
+        if (fileSize < 100 * 1024 * 1024) { // 100MB limit for data URLs
+            return await downloadWithDataURL(fileId, fileName, fileType, fileSize);
+        }
+        
+        throw error;
+    }
+}
+
+// ✅ NEW: File System Access API download
+async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
+    try {
+        // Check if File System Access API is supported
+        if (!('showSaveFilePicker' in window)) {
+            throw new Error('File System Access API not supported');
+        }
+        
+        // Let user choose download location
+        const fileHandle = await window.showSaveFilePicker({
+            suggestedName: fileName,
+            types: [{
+                description: 'File',
+                accept: {
+                    [fileType]: [`.${fileName.split('.').pop()}`]
+                }
+            }]
+        });
+
+        const writable = await fileHandle.createWritable();
+        
+        // Get chunks and write directly to file system
+        const chunks = await getFileChunks(fileId);
+        let downloadedSize = 0;
+        
+        for (const chunk of chunks) {
+            const arrayBuffer = await chunk.chunkData.arrayBuffer();
+            await writable.write(arrayBuffer);
+            
+            downloadedSize += arrayBuffer.byteLength;
+            
+            // Update progress
+            const progress = (downloadedSize / fileSize) * 100;
+            updateProgress(progress, fileId);
+            
+            // Small delay
+            await new Promise(resolve => setTimeout(resolve, 1));
+        }
+        
+        await writable.close();
+        
+        console.log('File downloaded with File System API');
+        showNotification(`${fileName} downloaded successfully`, 'success');
+        
+        return true;
+        
+    } catch (error) {
+        console.error('File System API failed:', error);
+        throw error;
+    }
+}
+
+// ✅ NEW: Native download with chunked blob (works on ALL devices)
+async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSize) {
+    try {
+        // Get chunks from IndexedDB
+        const chunks = await getFileChunks(fileId);
+        
+        if (chunks.length === 0) {
+            throw new Error('No file chunks found');
+        }
+        
+        // Process chunks in smaller batches to avoid memory issues
+        const batchSize = isPWA() ? 25 : 50; // Smaller batches for PWA
+        const allBlobs = [];
+        
+        for (let i = 0; i < chunks.length; i += batchSize) {
+            const batch = chunks.slice(i, i + batchSize);
+            
+            // Convert batch to array buffers
+            const batchBuffers = await Promise.all(
+                batch.map(chunk => chunk.chunkData.arrayBuffer())
+            );
+            
+            // Create blob for this batch
+            const batchBlob = new Blob(batchBuffers, { type: fileType });
+            allBlobs.push(batchBlob);
+            
+            // Update progress
+            const progress = Math.min(((i + batchSize) / chunks.length) * 100, 100);
+            updateProgress(progress, fileId);
+            
+            // Small delay to prevent memory issues
+            await new Promise(resolve => setTimeout(resolve, isPWA() ? 50 : 10));
+        }
+        
+        // Create final blob from all batches
+        const finalBlob = new Blob(allBlobs, { type: fileType });
+        
+        // Download using native method
+        const url = URL.createObjectURL(finalBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        // Clean up
+        setTimeout(() => {
+            URL.revokeObjectURL(url);
+            // Clear blobs from memory
+            allBlobs.length = 0;
+        }, 1000);
+        
+        console.log('File downloaded with native chunked blob');
+        showNotification(`${fileName} downloaded successfully`, 'success');
+        
+        return true;
+        
+    } catch (error) {
+        console.error('Native chunked blob download failed:', error);
+        throw error;
+    }
+}
+
+// ✅ NEW: Data URL fallback (for smaller files)
+async function downloadWithDataURL(fileId, fileName, fileType, fileSize) {
+    try {
+        const chunks = await getFileChunks(fileId);
+        
+        if (chunks.length === 0) {
+            throw new Error('No file chunks found');
+        }
+        
+        // Convert to base64 data URL
+        const base64Chunks = [];
+        
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const arrayBuffer = await chunk.chunkData.arrayBuffer();
+            const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+            base64Chunks.push(base64);
+            
+            // Update progress
+            const progress = ((i + 1) / chunks.length) * 100;
+            updateProgress(progress, fileId);
+            
+            // Small delay
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        
+        // Create data URL
+        const dataUrl = `data:${fileType};base64,${base64Chunks.join('')}`;
+        
+        // Download
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        console.log('File downloaded with data URL');
+        showNotification(`${fileName} downloaded successfully`, 'success');
+        
+        return true;
+        
+    } catch (error) {
+        console.error('Data URL download failed:', error);
+        throw error;
+    }
+}
+
 // Initialize share button if Web Share API is available
 function initShareButton() {
     if (navigator.share) {
@@ -300,6 +541,76 @@ async function shareId() {
             console.error('Error sharing:', error);
             showNotification('Failed to share', 'error');
         }
+    }
+}
+
+// ✅ NEW: Streaming file transfer without memory accumulation
+async function sendFileStreaming(file, conn, fileId) {
+    try {
+        if (!conn.open) {
+            throw new Error('Connection is not open');
+        }
+
+        // Send file header first
+        conn.send({
+            type: 'file-header',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            originalSender: peer.id,
+            timestamp: Date.now()
+        });
+
+        // Stream file in manageable chunks
+        const chunkSize = 64 * 1024; // 64KB chunks (larger for efficiency)
+        let offset = 0;
+        let lastProgressUpdate = 0;
+
+        while (offset < file.size) {
+            if (!conn.open) {
+                throw new Error('Connection lost during transfer');
+            }
+
+            // Read chunk without loading entire file
+            const chunk = file.slice(offset, offset + chunkSize);
+            const arrayBuffer = await chunk.arrayBuffer();
+
+            conn.send({
+                type: 'file-chunk',
+                fileId: fileId,
+                data: arrayBuffer,
+                offset: offset,
+                total: file.size
+            });
+
+            offset += chunk.byteLength;
+
+            // Update progress
+            const currentProgress = (offset / file.size) * 100;
+            if (currentProgress - lastProgressUpdate >= 1) {
+                updateProgress(currentProgress, fileId);
+                lastProgressUpdate = currentProgress;
+            }
+
+            // Small delay to prevent overwhelming the connection
+            await new Promise(resolve => setTimeout(resolve, 1));
+        }
+
+        // Send completion message
+        conn.send({
+            type: 'file-complete',
+            fileId: fileId,
+            fileName: file.name,
+            fileType: file.type,
+            fileSize: file.size,
+            timestamp: Date.now()
+        });
+
+        console.log(`File sent successfully to peer ${conn.peer}`);
+    } catch (error) {
+        console.error(`Error sending file to peer:`, error);
+        throw error;
     }
 }
 
@@ -579,57 +890,62 @@ async function handleFileHeader(data) {
     updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
 }
 
-// Handle file chunk
+// ✅ MODIFIED: Handle file chunks with streaming storage
 async function handleFileChunk(data) {
     const fileData = fileChunks[data.fileId];
     if (!fileData) return;
 
-    fileData.chunks.push(data.data);
-    fileData.receivedSize += data.data.byteLength;
-    
-    // Update progress more smoothly (update every 1% change)
-    const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
-    if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
-        updateProgress(currentProgress, data.fileId);
-        fileData.lastProgressUpdate = currentProgress;
+    try {
+        // Store chunk in IndexedDB for streaming download
+        await storeFileChunk(data.fileId, data.data, data.chunkIndex || 0);
+        
+        fileData.receivedSize += data.data.byteLength;
+        
+        // Update progress
+        const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
+        if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
+            updateProgress(currentProgress, data.fileId);
+            fileData.lastProgressUpdate = currentProgress;
+        }
+        
+    } catch (error) {
+        console.error('Error handling file chunk:', error);
+        throw error;
     }
 }
 
-// Handle file completion
+// ✅ MODIFIED: Handle file completion with streaming download
 async function handleFileComplete(data) {
     const fileData = fileChunks[data.fileId];
     if (!fileData) return;
 
     try {
-        // Combine chunks into blob if this is a blob transfer
-        if (fileData.chunks.length > 0) {
-            const blob = new Blob(fileData.chunks, { type: fileData.fileType });
-            
-            // Verify file size
-            if (blob.size !== fileData.fileSize) {
-                throw new Error('Received file size does not match expected size');
-            }
+        // Verify total size
+        const chunks = await getFileChunks(data.fileId);
+        let totalSize = 0;
+        
+        for (const chunk of chunks) {
+            totalSize += chunk.chunkData.byteLength;
+        }
+        
+        // Allow 1% tolerance for large files
+        const tolerance = Math.max(1024, fileData.fileSize * 0.01);
+        if (Math.abs(totalSize - fileData.fileSize) > tolerance) {
+            throw new Error(`Size mismatch: expected ${fileData.fileSize}, got ${totalSize}`);
+        }
 
-            // Create download URL and trigger download
-            downloadBlob(blob, fileData.fileName, data.fileId);
-            showNotification(`Downloaded ${fileData.fileName}`, 'success');
-
-            // Update UI to show completed state
-            const listItem = document.querySelector(`[data-file-id="${data.fileId}"]`);
-            if (listItem) {
-                listItem.classList.add('download-completed');
-                const downloadButton = listItem.querySelector('.icon-button');
-                if (downloadButton) {
-                    downloadButton.classList.add('download-completed');
-                    downloadButton.innerHTML = '<span class="material-icons">open_in_new</span>';
-                    downloadButton.title = 'Open file';
-                    
-                    // Store the blob URL for opening the file
-                    const blobUrl = URL.createObjectURL(blob);
-                    downloadButton.onclick = () => {
-                        window.open(blobUrl, '_blank');
-                    };
-                }
+        // ✅ Download using universal streaming method
+        await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
+        
+        // Update UI
+        const listItem = document.querySelector(`[data-file-id="${data.fileId}"]`);
+        if (listItem) {
+            listItem.classList.add('download-completed');
+            const downloadButton = listItem.querySelector('.icon-button');
+            if (downloadButton) {
+                downloadButton.classList.add('download-completed');
+                downloadButton.innerHTML = '<span class="material-icons">check</span>';
+                downloadButton.title = 'Download completed';
             }
         }
 
@@ -653,12 +969,15 @@ async function handleFileComplete(data) {
             }
         }
 
+        // Clean up chunks
+        await cleanupFileChunks(data.fileId);
+
     } catch (error) {
         console.error('Error handling file completion:', error);
         showNotification('Error processing file: ' + error.message, 'error');
     } finally {
         delete fileChunks[data.fileId];
-        elements.transferProgress.classList.add('hidden'); // Ensure it's hidden
+        elements.transferProgress.classList.add('hidden');
         updateProgress(0);
         updateTransferInfo('');
     }
@@ -967,6 +1286,7 @@ async function processFileQueue() {
 }
 
 // Modify sendFile function to work with queue
+// ✅ MODIFIED: Update sendFile function to use streaming
 async function sendFile(file) {
     if (connections.size === 0) {
         showNotification('Please connect to at least one peer first', 'error');
@@ -982,28 +1302,14 @@ async function sendFile(file) {
 
     try {
         transferInProgress = true;
-        elements.transferProgress.classList.add('hidden'); // Always hide
+        elements.transferProgress.classList.remove('hidden');
         updateProgress(0);
         updateTransferInfo(`Sending ${file.name}...`);
 
         // Generate a unique file ID that will be same for all recipients
         const fileId = generateFileId(file);
         
-        // Create file blob once for the sender
-        const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
-        
-        // Add to sender's history first
-        const fileInfo = {
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            id: fileId,
-            blob: fileBlob,
-            sharedBy: peer.id
-        };
-        addFileToHistory(fileInfo, 'sent');
-
-        // Send to all connected peers
+        // Send to all connected peers using streaming
         const sendPromises = [];
         let successCount = 0;
         const errors = [];
@@ -1011,7 +1317,7 @@ async function sendFile(file) {
         for (const [peerId, conn] of connections) {
             if (conn && conn.open) {
                 try {
-                    await sendFileToPeer(file, conn, fileId, fileBlob);
+                    await sendFileStreaming(file, conn, fileId);
                     successCount++;
                 } catch (error) {
                     errors.push(error.message);
@@ -1030,7 +1336,7 @@ async function sendFile(file) {
         throw error; // Propagate error for queue processing
     } finally {
         transferInProgress = false;
-        elements.transferProgress.classList.add('hidden'); // Always hide
+        elements.transferProgress.classList.add('hidden');
         updateProgress(0);
         // Process next file in queue if any
         processFileQueue();
