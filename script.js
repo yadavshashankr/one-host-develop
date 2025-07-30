@@ -495,7 +495,11 @@ async function downloadFileUniversal(fileId, fileName, fileType, fileSize) {
     try {
         // Method 1: File System Access API (modern desktop)
         if ('showSaveFilePicker' in window && !isMobileDevice()) {
-            return await downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize);
+            const result = await downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize);
+        if (result === false) {
+            return false; // User cancelled
+        }
+        return result;
         }
         
         // Method 2: Native download with chunked blob (all devices)
@@ -561,6 +565,14 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
         
     } catch (error) {
         console.error('File System API failed:', error);
+        
+        // Handle user cancellation gracefully
+        if (error.name === 'AbortError' || error.message.includes('user aborted')) {
+            console.log('User cancelled file download');
+            showNotification('Download cancelled by user', 'info');
+            return false; // Return false instead of throwing
+        }
+        
         throw error;
     }
 }
@@ -574,6 +586,11 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
         if (chunks.length === 0) {
             throw new Error('No file chunks found');
         }
+        
+        // Sort chunks by chunkIndex to ensure correct order
+        chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        
+        console.log(`Reassembling file: ${chunks.length} chunks, expected size: ${fileSize}`);
         
         // Process chunks in smaller batches to avoid memory issues
         const batchSize = isPWA() ? 25 : 50; // Smaller batches for PWA
@@ -1247,32 +1264,96 @@ async function handleFileComplete(data) {
             throw new Error(`Size mismatch: expected ${fileData.fileSize}, got ${fileData.receivedSize}`);
         }
 
-        // ✅ Show download button instead of auto-downloading (browser security requirement)
+        // ✅ Automatically trigger download (file picker will open)
         console.log(`File download ready: ${fileData.fileName} (${fileData.fileSize} bytes)`);
-        showNotification(`${fileData.fileName} ready for download`, 'success');
+        showNotification(`${fileData.fileName} download starting...`, 'success');
         
-        // Update UI to show download button
+        // Update UI to show downloading state
         const listItem = document.querySelector(`[data-file-id="${data.fileId}"]`);
         if (listItem) {
-            listItem.classList.add('download-ready');
+            listItem.classList.add('downloading');
             const downloadButton = listItem.querySelector('.icon-button');
             if (downloadButton) {
-                downloadButton.innerHTML = '<span class="material-icons">download</span>';
-                downloadButton.title = 'Click to download file';
-                downloadButton.onclick = async () => {
-                    try {
-                        await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
-                        // Update UI after successful download
-                        listItem.classList.remove('download-ready');
-                        listItem.classList.add('download-completed');
-                        downloadButton.innerHTML = '<span class="material-icons">check</span>';
-                        downloadButton.title = 'Download completed';
-                    } catch (error) {
-                        console.error('Download failed:', error);
-                        showNotification(`Download failed: ${error.message}`, 'error');
-                    }
-                };
+                downloadButton.innerHTML = '<span class="material-icons">hourglass_empty</span>';
+                downloadButton.title = 'Downloading...';
             }
+        }
+        
+        // Automatically start download
+        try {
+            const downloadResult = await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
+            
+            // Check if user cancelled
+            if (downloadResult === false) {
+                // User cancelled - reset UI to allow retry
+                if (listItem) {
+                    listItem.classList.remove('downloading');
+                    const downloadButton = listItem.querySelector('.icon-button');
+                    if (downloadButton) {
+                        downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                        downloadButton.title = 'Click to download file';
+                        downloadButton.onclick = async () => {
+                            try {
+                                listItem.classList.add('downloading');
+                                downloadButton.innerHTML = '<span class="material-icons">hourglass_empty</span>';
+                                await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
+                                listItem.classList.remove('downloading');
+                                listItem.classList.add('download-completed');
+                                downloadButton.innerHTML = '<span class="material-icons">check</span>';
+                                downloadButton.title = 'Download completed';
+                                showNotification(`${fileData.fileName} downloaded successfully`, 'success');
+                            } catch (retryError) {
+                                console.error('Retry download failed:', retryError);
+                                listItem.classList.remove('downloading');
+                                downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                                showNotification(`Download failed: ${retryError.message}`, 'error');
+                            }
+                        };
+                    }
+                }
+                return; // Exit early for cancellation
+            }
+            
+            // Update UI after successful download
+            if (listItem) {
+                listItem.classList.remove('downloading');
+                listItem.classList.add('download-completed');
+                const downloadButton = listItem.querySelector('.icon-button');
+                if (downloadButton) {
+                    downloadButton.innerHTML = '<span class="material-icons">check</span>';
+                    downloadButton.title = 'Download completed';
+                }
+            }
+            showNotification(`${fileData.fileName} downloaded successfully`, 'success');
+        } catch (error) {
+            console.error('Download failed:', error);
+            // Update UI for failed download
+            if (listItem) {
+                listItem.classList.remove('downloading');
+                const downloadButton = listItem.querySelector('.icon-button');
+                if (downloadButton) {
+                    downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                    downloadButton.title = 'Click to retry download';
+                    downloadButton.onclick = async () => {
+                        try {
+                            listItem.classList.add('downloading');
+                            downloadButton.innerHTML = '<span class="material-icons">hourglass_empty</span>';
+                            await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
+                            listItem.classList.remove('downloading');
+                            listItem.classList.add('download-completed');
+                            downloadButton.innerHTML = '<span class="material-icons">check</span>';
+                            downloadButton.title = 'Download completed';
+                            showNotification(`${fileData.fileName} downloaded successfully`, 'success');
+                        } catch (retryError) {
+                            console.error('Retry download failed:', retryError);
+                            listItem.classList.remove('downloading');
+                            downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                            showNotification(`Download failed: ${retryError.message}`, 'error');
+                        }
+                    };
+                }
+            }
+            showNotification(`Download failed: ${error.message}`, 'error');
         }
 
         // Create file info object
