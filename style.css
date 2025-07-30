@@ -532,11 +532,14 @@ input[type="file"] {
 
 /* Download completed styles */
 .files-list li.download-completed {
-    background: rgba(76, 175, 80, 0.1);  /* Light green background */
+    background: rgba(76, 175, 80, 0.15);  /* More prominent green background */
+    border-left: 4px solid #4CAF50;  /* Green left border */
+    transition: all 0.3s ease;
 }
 
 .icon-button.download-completed {
     color: #4CAF50;  /* Green color for completed icon */
+    background-color: rgba(76, 175, 80, 0.1);  /* Light green background for button */
 }
 
 /* Peer ID editing styles */

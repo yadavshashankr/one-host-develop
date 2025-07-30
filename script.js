@@ -1264,96 +1264,56 @@ async function handleFileComplete(data) {
             throw new Error(`Size mismatch: expected ${fileData.fileSize}, got ${fileData.receivedSize}`);
         }
 
-        // ✅ Automatically trigger download (file picker will open)
+        // ✅ Show download button for user-triggered download
         console.log(`File download ready: ${fileData.fileName} (${fileData.fileSize} bytes)`);
-        showNotification(`${fileData.fileName} download starting...`, 'success');
+        showNotification(`${fileData.fileName} ready for download`, 'success');
         
-        // Update UI to show downloading state
+        // Update UI to show download button
         const listItem = document.querySelector(`[data-file-id="${data.fileId}"]`);
         if (listItem) {
-            listItem.classList.add('downloading');
+            listItem.classList.add('download-ready');
             const downloadButton = listItem.querySelector('.icon-button');
             if (downloadButton) {
-                downloadButton.innerHTML = '<span class="material-icons">hourglass_empty</span>';
-                downloadButton.title = 'Downloading...';
-            }
-        }
-        
-        // Automatically start download
-        try {
-            const downloadResult = await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
-            
-            // Check if user cancelled
-            if (downloadResult === false) {
-                // User cancelled - reset UI to allow retry
-                if (listItem) {
-                    listItem.classList.remove('downloading');
-                    const downloadButton = listItem.querySelector('.icon-button');
-                    if (downloadButton) {
-                        downloadButton.innerHTML = '<span class="material-icons">download</span>';
-                        downloadButton.title = 'Click to download file';
-                        downloadButton.onclick = async () => {
-                            try {
-                                listItem.classList.add('downloading');
-                                downloadButton.innerHTML = '<span class="material-icons">hourglass_empty</span>';
-                                await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
-                                listItem.classList.remove('downloading');
-                                listItem.classList.add('download-completed');
-                                downloadButton.innerHTML = '<span class="material-icons">check</span>';
-                                downloadButton.title = 'Download completed';
-                                showNotification(`${fileData.fileName} downloaded successfully`, 'success');
-                            } catch (retryError) {
-                                console.error('Retry download failed:', retryError);
-                                listItem.classList.remove('downloading');
-                                downloadButton.innerHTML = '<span class="material-icons">download</span>';
-                                showNotification(`Download failed: ${retryError.message}`, 'error');
-                            }
-                        };
-                    }
-                }
-                return; // Exit early for cancellation
-            }
-            
-            // Update UI after successful download
-            if (listItem) {
-                listItem.classList.remove('downloading');
-                listItem.classList.add('download-completed');
-                const downloadButton = listItem.querySelector('.icon-button');
-                if (downloadButton) {
-                    downloadButton.innerHTML = '<span class="material-icons">check</span>';
-                    downloadButton.title = 'Download completed';
-                }
-            }
-            showNotification(`${fileData.fileName} downloaded successfully`, 'success');
-        } catch (error) {
-            console.error('Download failed:', error);
-            // Update UI for failed download
-            if (listItem) {
-                listItem.classList.remove('downloading');
-                const downloadButton = listItem.querySelector('.icon-button');
-                if (downloadButton) {
-                    downloadButton.innerHTML = '<span class="material-icons">download</span>';
-                    downloadButton.title = 'Click to retry download';
-                    downloadButton.onclick = async () => {
-                        try {
-                            listItem.classList.add('downloading');
-                            downloadButton.innerHTML = '<span class="material-icons">hourglass_empty</span>';
-                            await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
+                downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                downloadButton.title = 'Click to download file';
+                downloadButton.onclick = async () => {
+                    try {
+                        // Update UI to downloading state
+                        listItem.classList.remove('download-ready');
+                        listItem.classList.add('downloading');
+                        downloadButton.innerHTML = '<span class="material-icons">hourglass_empty</span>';
+                        downloadButton.title = 'Downloading...';
+                        
+                        const downloadResult = await downloadFileUniversal(data.fileId, fileData.fileName, fileData.fileType, fileData.fileSize);
+                        
+                        // Check if user cancelled
+                        if (downloadResult === false) {
+                            // User cancelled - reset UI to allow retry
                             listItem.classList.remove('downloading');
-                            listItem.classList.add('download-completed');
-                            downloadButton.innerHTML = '<span class="material-icons">check</span>';
-                            downloadButton.title = 'Download completed';
-                            showNotification(`${fileData.fileName} downloaded successfully`, 'success');
-                        } catch (retryError) {
-                            console.error('Retry download failed:', retryError);
-                            listItem.classList.remove('downloading');
+                            listItem.classList.add('download-ready');
                             downloadButton.innerHTML = '<span class="material-icons">download</span>';
-                            showNotification(`Download failed: ${retryError.message}`, 'error');
+                            downloadButton.title = 'Click to download file';
+                            return; // Exit early for cancellation
                         }
-                    };
-                }
+                        
+                        // Update UI after successful download
+                        listItem.classList.remove('downloading');
+                        listItem.classList.add('download-completed');
+                        downloadButton.innerHTML = '<span class="material-icons">check</span>';
+                        downloadButton.title = 'Download completed';
+                        showNotification(`${fileData.fileName} downloaded successfully`, 'success');
+                        
+                    } catch (error) {
+                        console.error('Download failed:', error);
+                        // Update UI for failed download
+                        listItem.classList.remove('downloading');
+                        listItem.classList.add('download-ready');
+                        downloadButton.innerHTML = '<span class="material-icons">download</span>';
+                        downloadButton.title = 'Click to retry download';
+                        showNotification(`Download failed: ${error.message}`, 'error');
+                    }
+                };
             }
-            showNotification(`Download failed: ${error.message}`, 'error');
         }
 
         // Create file info object
