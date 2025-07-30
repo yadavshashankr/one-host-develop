@@ -549,6 +549,35 @@ function preserveFileChunks(fileId) {
     }
 }
 
+// ✅ NEW: Check file transfer status and provide guidance
+function checkFileTransferStatus(fileId, fileName) {
+    console.log(`=== FILE TRANSFER STATUS CHECK ===`);
+    console.log(`Checking transfer status for: ${fileName} (${fileId})`);
+    
+    // Check if there are any active connections
+    const activeConnections = Array.from(connections.values()).filter(conn => conn.open);
+    console.log(`Active connections: ${activeConnections.length}`);
+    
+    if (activeConnections.length === 0) {
+        console.warn(`No active connections found - file transfer may have failed`);
+        showNotification('No active connection found. Please ensure both devices are connected.', 'warning');
+        return false;
+    }
+    
+    // Check if the file was ever in the transfer queue
+    console.log(`Checking if file was in transfer queue...`);
+    
+    // Check if there are any recent file transfer activities
+    const recentActivity = sessionStorage.getItem('recentFileTransfers');
+    if (recentActivity) {
+        console.log(`Recent file transfer activity:`, recentActivity);
+    } else {
+        console.log(`No recent file transfer activity found`);
+    }
+    
+    return true;
+}
+
 // ✅ NEW: Check if file was actually received
 function checkIfFileWasReceived(fileId, fileName) {
     console.log(`=== FILE RECEIPT CHECK ===`);
@@ -882,8 +911,13 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
         
         if (chunks.length === 0) {
             console.error(`No chunks found for ${fileId} - running debug`);
+            checkFileTransferStatus(fileId, fileName);
             checkIfFileWasReceived(fileId, fileName);
             listAllAvailableFiles();
+            
+            // Provide user-friendly error message
+            const errorMessage = `File "${fileName}" was never received. Please ensure the file was sent from the other device and the transfer completed successfully.`;
+            showNotification(errorMessage, 'error');
             throw new Error('No file chunks found for File System API download');
         }
         
@@ -1200,6 +1234,35 @@ async function shareId() {
             console.error('Error sharing:', error);
             showNotification('Failed to share', 'error');
         }
+    }
+}
+
+// ✅ NEW: Track file transfer activities
+function trackFileTransferActivity(action, fileId, fileName) {
+    try {
+        const timestamp = Date.now();
+        const activity = {
+            action: action,
+            fileId: fileId,
+            fileName: fileName,
+            timestamp: timestamp,
+            date: new Date().toISOString()
+        };
+        
+        // Store recent activity
+        const recentActivity = sessionStorage.getItem('recentFileTransfers');
+        let activities = recentActivity ? JSON.parse(recentActivity) : [];
+        activities.push(activity);
+        
+        // Keep only last 10 activities
+        if (activities.length > 10) {
+            activities = activities.slice(-10);
+        }
+        
+        sessionStorage.setItem('recentFileTransfers', JSON.stringify(activities));
+        console.log(`File transfer activity tracked: ${action} - ${fileName} (${fileId})`);
+    } catch (error) {
+        console.error('Error tracking file transfer activity:', error);
     }
 }
 
@@ -1636,6 +1699,9 @@ async function handleFileHeader(data) {
     console.log(`=== HANDLE FILE HEADER START ===`);
     console.log('Received file header:', data);
     
+    // Track file transfer activity
+    trackFileTransferActivity('file-header-received', data.fileId, data.fileName);
+    
     fileChunks[data.fileId] = {
         chunks: [],
         fileName: data.fileName,
@@ -1722,6 +1788,9 @@ async function handleFileChunk(data) {
 // ✅ MODIFIED: Handle file completion with streaming download
 async function handleFileComplete(data) {
     console.log(`File complete signal received for ${data.fileId}`);
+    
+    // Track file transfer activity
+    trackFileTransferActivity('file-complete-received', data.fileId, 'unknown');
     
     const fileData = fileChunks[data.fileId];
     if (!fileData) {
