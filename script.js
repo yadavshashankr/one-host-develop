@@ -745,10 +745,24 @@ async function sendFileStreaming(file, conn, fileId) {
                 }
 
                 // Read chunk without loading entire file
+                console.log(`Creating chunk: offset=${offset}, end=${offset + chunkSize}, fileSize=${file.size}`);
                 const chunk = file.slice(offset, offset + chunkSize);
+                console.log(`Chunk created:`, {
+                    chunk: chunk,
+                    type: typeof chunk,
+                    constructor: chunk?.constructor?.name,
+                    byteLength: chunk?.byteLength,
+                    size: chunk?.size,
+                    length: chunk?.length
+                });
                 
                 // Validate chunk
                 if (!chunk || typeof chunk.byteLength === 'undefined') {
+                    console.error(`Chunk validation failed:`, {
+                        chunk: chunk,
+                        byteLength: chunk?.byteLength,
+                        type: typeof chunk?.byteLength
+                    });
                     throw new Error(`Invalid chunk created at offset ${offset}`);
                 }
                 
@@ -1021,16 +1035,18 @@ function setupConnectionHandlers(conn) {
                     // Handle streaming download request
                     await handleStreamingRequest(data, conn);
                     break;
+                case 'streaming-error':
+                    // Handle streaming error
+                    console.error('Streaming error received:', data);
+                    showNotification(`Streaming error: ${data.error}`, 'error');
+                    elements.transferProgress.classList.add('hidden');
+                    updateTransferInfo('');
+                    break;
                 case 'blob-request-forwarded':
                     // Handle forwarded blob request (host only)
                     await handleForwardedBlobRequest(data, conn);
                     break;
                 case 'blob-error':
-                    showNotification(`Failed to download file: ${data.error}`, 'error');
-                    elements.transferProgress.classList.add('hidden');
-                    updateTransferInfo('');
-                    break;
-                case 'streaming-error':
                     showNotification(`Failed to download file: ${data.error}`, 'error');
                     elements.transferProgress.classList.add('hidden');
                     updateTransferInfo('');
