@@ -739,8 +739,19 @@ async function sendFileStreaming(file, conn, fileId) {
                     throw new Error('Connection lost during transfer');
                 }
 
+                // Validate file and offset
+                if (!file || typeof file.slice !== 'function') {
+                    throw new Error('Invalid file object or file.slice not available');
+                }
+
                 // Read chunk without loading entire file
                 const chunk = file.slice(offset, offset + chunkSize);
+                
+                // Validate chunk
+                if (!chunk || typeof chunk.byteLength === 'undefined') {
+                    throw new Error(`Invalid chunk created at offset ${offset}`);
+                }
+                
                 const arrayBuffer = await chunk.arrayBuffer();
                 const chunkIndex = Math.floor(offset / chunkSize);
 
@@ -772,6 +783,12 @@ async function sendFileStreaming(file, conn, fileId) {
                 
             } catch (error) {
                 console.error(`Error sending chunk at offset ${offset}:`, error);
+                console.error(`File details:`, {
+                    name: file?.name,
+                    size: file?.size,
+                    type: file?.type,
+                    sliceAvailable: typeof file?.slice === 'function'
+                });
                 throw new Error(`Failed to send chunk at offset ${offset}: ${error.message}`);
             }
         }
@@ -1464,6 +1481,14 @@ async function handleStreamingRequest(data, conn) {
         }
 
         console.log(`File found in store: ${sentFile.name}, size: ${sentFile.size}`);
+        console.log(`File object details:`, {
+            name: sentFile.name,
+            size: sentFile.size,
+            type: sentFile.type,
+            constructor: sentFile.constructor.name,
+            sliceAvailable: typeof sentFile.slice === 'function',
+            arrayBufferAvailable: typeof sentFile.arrayBuffer === 'function'
+        });
         console.log(`Starting streaming transfer for: ${data.fileName}`);
         
         // Start streaming the file
