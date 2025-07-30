@@ -727,6 +727,7 @@ async function sendFileStreaming(file, conn, fileId) {
                 type: 'file-chunk',
                 fileId: fileId,
                 data: arrayBuffer,
+                chunkIndex: Math.floor(offset / chunkSize), // ✅ Use chunkIndex instead of offset
                 offset: offset,
                 total: file.size
             });
@@ -1032,6 +1033,14 @@ async function handleFileHeader(data) {
         receivedSize: 0,
         originalSender: data.originalSender
     };
+    
+    console.log(`File header initialized for ${data.fileId}:`, {
+        fileName: data.fileName,
+        fileSize: data.fileSize,
+        receivedSize: 0,
+        chunksLength: 0
+    });
+    
     elements.transferProgress.classList.add('hidden'); // Always hide
     updateProgress(0);
     updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
@@ -1039,20 +1048,30 @@ async function handleFileHeader(data) {
 
 // ✅ MODIFIED: Handle file chunks with streaming storage
 async function handleFileChunk(data) {
+    // Calculate chunk index from offset if not provided (backward compatibility)
+    const chunkIndex = data.chunkIndex !== undefined ? data.chunkIndex : 
+                      (data.offset !== undefined ? Math.floor(data.offset / (64 * 1024)) : 0);
+    
+    console.log(`Received chunk for ${data.fileId}, index: ${chunkIndex}, size: ${data.data?.byteLength || 0}, offset: ${data.offset || 'N/A'}`);
+    
     const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
+    if (!fileData) {
+        console.error(`No file data found for ${data.fileId}`);
+        return;
+    }
 
     try {
         // Store chunk in IndexedDB for streaming download
-        await storeFileChunk(data.fileId, data.data, data.chunkIndex || 0);
+        await storeFileChunk(data.fileId, data.data, chunkIndex);
         
         // Also store in local array for immediate access
         if (!fileData.chunks) {
             fileData.chunks = [];
         }
-        fileData.chunks[data.chunkIndex || 0] = data.data;
+        fileData.chunks[chunkIndex] = data.data;
         
-        fileData.receivedSize += data.data.byteLength;
+        const previousSize = fileData.receivedSize || 0;
+        fileData.receivedSize = previousSize + data.data.byteLength;
         
         // Update progress
         const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
@@ -1061,7 +1080,14 @@ async function handleFileChunk(data) {
             fileData.lastProgressUpdate = currentProgress;
         }
         
-        console.log(`Chunk ${data.chunkIndex || 0} stored, received: ${fileData.receivedSize}/${fileData.fileSize}`);
+        console.log(`Chunk ${chunkIndex} stored, received: ${fileData.receivedSize}/${fileData.fileSize} (added ${data.data.byteLength})`);
+        console.log(`File data state:`, {
+            fileId: data.fileId,
+            receivedSize: fileData.receivedSize,
+            fileSize: fileData.fileSize,
+            chunksLength: fileData.chunks.length,
+            chunkData: fileData.chunks[chunkIndex] ? 'present' : 'missing'
+        });
         
     } catch (error) {
         console.error('Error handling file chunk:', error);
@@ -1071,11 +1097,24 @@ async function handleFileChunk(data) {
 
 // ✅ MODIFIED: Handle file completion with streaming download
 async function handleFileComplete(data) {
+    console.log(`File complete signal received for ${data.fileId}`);
+    
     const fileData = fileChunks[data.fileId];
-    if (!fileData) return;
+    if (!fileData) {
+        console.error(`No file data found for ${data.fileId} during completion`);
+        return;
+    }
 
     try {
         console.log(`File complete: ${fileData.fileName}, expected: ${fileData.fileSize}, received: ${fileData.receivedSize}`);
+        console.log(`File data state at completion:`, {
+            fileId: data.fileId,
+            fileName: fileData.fileName,
+            fileSize: fileData.fileSize,
+            receivedSize: fileData.receivedSize,
+            chunksLength: fileData.chunks ? fileData.chunks.length : 0,
+            chunksArray: fileData.chunks ? fileData.chunks.filter(c => c !== undefined).length : 0
+        });
         
         // Use the tracked received size instead of recalculating from chunks
         const tolerance = Math.max(1024, fileData.fileSize * 0.01);
