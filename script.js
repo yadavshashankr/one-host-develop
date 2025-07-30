@@ -331,6 +331,7 @@ async function getFileChunks(fileId) {
         const localChunks = getLocalFileChunks(fileId);
         if (localChunks.length > 0) {
             console.log(`Retrieved ${localChunks.length} chunks from local storage for ${fileId}`);
+            console.log(`Local chunks details:`, localChunks.map(c => ({ index: c.chunkIndex, size: c.chunkData?.byteLength })));
             return localChunks;
         }
         
@@ -343,6 +344,13 @@ async function getFileChunks(fileId) {
                 
                 const chunks = await store.getAll(IDBKeyRange.only(fileId));
                 
+                // Ensure chunks is an array
+                if (!Array.isArray(chunks)) {
+                    console.error(`IndexedDB returned non-array for ${fileId}:`, chunks);
+                    console.log(`Type: ${typeof chunks}, Value:`, chunks);
+                    return [];
+                }
+                
                 // Sort by chunk index to ensure correct order
                 const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
                 console.log(`Retrieved ${sortedChunks.length} chunks from IndexedDB for ${fileId}`);
@@ -353,6 +361,13 @@ async function getFileChunks(fileId) {
         // Fallback to in-memory storage
         if (fallbackChunkStorage.has(fileId)) {
             const chunks = fallbackChunkStorage.get(fileId);
+            
+            // Ensure chunks is an array
+            if (!Array.isArray(chunks)) {
+                console.error(`Fallback storage returned non-array for ${fileId}:`, chunks);
+                return [];
+            }
+            
             const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
             console.log(`Retrieved ${sortedChunks.length} chunks from fallback storage for ${fileId}`);
             return sortedChunks;
@@ -374,6 +389,13 @@ async function getFileChunks(fileId) {
         // Fallback to in-memory storage on error
         if (fallbackChunkStorage.has(fileId)) {
             const chunks = fallbackChunkStorage.get(fileId);
+            
+            // Ensure chunks is an array
+            if (!Array.isArray(chunks)) {
+                console.error(`Fallback storage returned non-array after error for ${fileId}:`, chunks);
+                return [];
+            }
+            
             const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
             console.log(`Retrieved ${sortedChunks.length} chunks from fallback storage after error for ${fileId}`);
             return sortedChunks;
@@ -387,11 +409,19 @@ async function getFileChunks(fileId) {
 function getLocalFileChunks(fileId) {
     const fileData = fileChunks[fileId];
     if (!fileData || !fileData.chunks) {
+        console.log(`No fileData or chunks for ${fileId}:`, { fileData: !!fileData, chunks: !!fileData?.chunks });
         return [];
     }
     
+    console.log(`Local fileData for ${fileId}:`, {
+        chunksLength: fileData.chunks.length,
+        receivedSize: fileData.receivedSize,
+        fileSize: fileData.fileSize,
+        definedChunks: fileData.chunks.filter(c => c !== undefined).length
+    });
+    
     // Convert to the same format as IndexedDB chunks
-    return fileData.chunks
+    const result = fileData.chunks
         .filter(chunk => chunk !== undefined)
         .map((chunk, index) => ({
             fileId: fileId,
@@ -404,6 +434,9 @@ function getLocalFileChunks(fileId) {
                 chunkOrder: index
             }
         }));
+    
+    console.log(`Converted ${result.length} local chunks for ${fileId}`);
+    return result;
 }
 
 // ✅ NEW: Verify file integrity and completeness
