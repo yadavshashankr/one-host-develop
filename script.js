@@ -756,12 +756,14 @@ async function sendFileStreaming(file, conn, fileId) {
                     length: chunk?.length
                 });
                 
-                // Validate chunk
-                if (!chunk || typeof chunk.byteLength === 'undefined') {
+                // Validate chunk - use size for Blob objects, byteLength for File objects
+                const chunkSize = chunk.size || chunk.byteLength;
+                if (!chunk || typeof chunkSize === 'undefined') {
                     console.error(`Chunk validation failed:`, {
                         chunk: chunk,
+                        size: chunk?.size,
                         byteLength: chunk?.byteLength,
-                        type: typeof chunk?.byteLength
+                        type: typeof chunkSize
                     });
                     throw new Error(`Invalid chunk created at offset ${offset}`);
                 }
@@ -769,7 +771,7 @@ async function sendFileStreaming(file, conn, fileId) {
                 const arrayBuffer = await chunk.arrayBuffer();
                 const chunkIndex = Math.floor(offset / chunkSize);
 
-                console.log(`Sending chunk ${chunkIndex}: offset=${offset}, size=${chunk.byteLength}, total=${file.size}, connection open: ${conn.open}`);
+                console.log(`Sending chunk ${chunkIndex}: offset=${offset}, size=${chunkSize}, total=${file.size}, connection open: ${conn.open}`);
 
                 conn.send({
                     type: 'file-chunk',
@@ -780,7 +782,7 @@ async function sendFileStreaming(file, conn, fileId) {
                     total: file.size
                 });
 
-                offset += chunk.byteLength;
+                offset += chunkSize;
                 chunkCount++;
 
                 console.log(`Chunk ${chunkIndex} sent successfully, new offset: ${offset}`);
