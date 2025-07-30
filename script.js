@@ -322,7 +322,14 @@ async function storeFileChunk(fileId, chunkData, chunkIndex) {
 // ✅ NEW: Get all chunks for a file
 async function getFileChunks(fileId) {
     try {
-        // Try IndexedDB first
+        // Try local fileChunks first (most reliable)
+        const localChunks = getLocalFileChunks(fileId);
+        if (localChunks.length > 0) {
+            console.log(`Retrieved ${localChunks.length} chunks from local storage for ${fileId}`);
+            return localChunks;
+        }
+        
+        // Try IndexedDB next
         if (isIndexedDBSupported()) {
             const db = await initIndexedDB();
             if (db) {
@@ -332,29 +339,61 @@ async function getFileChunks(fileId) {
                 const chunks = await store.getAll(IDBKeyRange.only(fileId));
                 
                 // Sort by chunk index to ensure correct order
-                return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+                const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+                console.log(`Retrieved ${sortedChunks.length} chunks from IndexedDB for ${fileId}`);
+                return sortedChunks;
             }
         }
         
         // Fallback to in-memory storage
         if (fallbackChunkStorage.has(fileId)) {
             const chunks = fallbackChunkStorage.get(fileId);
-            return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+            const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+            console.log(`Retrieved ${sortedChunks.length} chunks from fallback storage for ${fileId}`);
+            return sortedChunks;
         }
         
+        console.log(`No chunks found for ${fileId}`);
         return [];
         
     } catch (error) {
         console.error('Error getting file chunks:', error);
         
+        // Try local fileChunks as fallback
+        const localChunks = getLocalFileChunks(fileId);
+        if (localChunks.length > 0) {
+            console.log(`Retrieved ${localChunks.length} chunks from local storage after error for ${fileId}`);
+            return localChunks;
+        }
+        
         // Fallback to in-memory storage on error
         if (fallbackChunkStorage.has(fileId)) {
             const chunks = fallbackChunkStorage.get(fileId);
-            return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+            const sortedChunks = chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+            console.log(`Retrieved ${sortedChunks.length} chunks from fallback storage after error for ${fileId}`);
+            return sortedChunks;
         }
         
         return [];
     }
+}
+
+// ✅ NEW: Get chunks from local fileChunks array
+function getLocalFileChunks(fileId) {
+    const fileData = fileChunks[fileId];
+    if (!fileData || !fileData.chunks) {
+        return [];
+    }
+    
+    // Convert to the same format as IndexedDB chunks
+    return fileData.chunks
+        .filter(chunk => chunk !== undefined)
+        .map((chunk, index) => ({
+            fileId: fileId,
+            chunkData: chunk,
+            chunkIndex: index,
+            timestamp: Date.now()
+        }));
 }
 
 // ✅ NEW: Clean up file chunks
@@ -375,11 +414,21 @@ async function cleanupFileChunks(fileId) {
         // Fallback: clean up in-memory storage
         fallbackChunkStorage.delete(fileId);
         
+        // Clean up local fileChunks
+        if (fileChunks[fileId]) {
+            delete fileChunks[fileId];
+        }
+        
     } catch (error) {
         console.error('Error cleaning up file chunks:', error);
         
         // Fallback: clean up in-memory storage
         fallbackChunkStorage.delete(fileId);
+        
+        // Clean up local fileChunks
+        if (fileChunks[fileId]) {
+            delete fileChunks[fileId];
+        }
     }
 }
 
@@ -997,6 +1046,12 @@ async function handleFileChunk(data) {
         // Store chunk in IndexedDB for streaming download
         await storeFileChunk(data.fileId, data.data, data.chunkIndex || 0);
         
+        // Also store in local array for immediate access
+        if (!fileData.chunks) {
+            fileData.chunks = [];
+        }
+        fileData.chunks[data.chunkIndex || 0] = data.data;
+        
         fileData.receivedSize += data.data.byteLength;
         
         // Update progress
@@ -1005,6 +1060,8 @@ async function handleFileChunk(data) {
             updateProgress(currentProgress, data.fileId);
             fileData.lastProgressUpdate = currentProgress;
         }
+        
+        console.log(`Chunk ${data.chunkIndex || 0} stored, received: ${fileData.receivedSize}/${fileData.fileSize}`);
         
     } catch (error) {
         console.error('Error handling file chunk:', error);
@@ -1018,18 +1075,12 @@ async function handleFileComplete(data) {
     if (!fileData) return;
 
     try {
-        // Verify total size
-        const chunks = await getFileChunks(data.fileId);
-        let totalSize = 0;
+        console.log(`File complete: ${fileData.fileName}, expected: ${fileData.fileSize}, received: ${fileData.receivedSize}`);
         
-        for (const chunk of chunks) {
-            totalSize += chunk.chunkData.byteLength;
-        }
-        
-        // Allow 1% tolerance for large files
+        // Use the tracked received size instead of recalculating from chunks
         const tolerance = Math.max(1024, fileData.fileSize * 0.01);
-        if (Math.abs(totalSize - fileData.fileSize) > tolerance) {
-            throw new Error(`Size mismatch: expected ${fileData.fileSize}, got ${totalSize}`);
+        if (Math.abs(fileData.receivedSize - fileData.fileSize) > tolerance) {
+            throw new Error(`Size mismatch: expected ${fileData.fileSize}, got ${fileData.receivedSize}`);
         }
 
         // ✅ Download using universal streaming method
