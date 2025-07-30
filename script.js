@@ -746,6 +746,15 @@ async function sendFileStreaming(file, conn, fileId) {
 
                 // Read chunk without loading entire file
                 console.log(`Creating chunk: offset=${offset}, end=${offset + chunkSize}, fileSize=${file.size}`);
+                console.log(`File object before slice:`, {
+                    file: file,
+                    type: typeof file,
+                    constructor: file?.constructor?.name,
+                    sliceAvailable: typeof file?.slice === 'function',
+                    size: file?.size,
+                    name: file?.name
+                });
+                
                 const chunk = file.slice(offset, offset + chunkSize);
                 console.log(`Chunk created:`, {
                     chunk: chunk,
@@ -758,6 +767,14 @@ async function sendFileStreaming(file, conn, fileId) {
                 
                 // Validate chunk - use size for Blob objects, byteLength for File objects
                 const chunkSize = chunk.size || chunk.byteLength;
+                console.log(`Chunk size calculation:`, {
+                    chunkSize: chunkSize,
+                    chunkSize: chunkSize,
+                    chunkSizeType: typeof chunkSize,
+                    size: chunk?.size,
+                    byteLength: chunk?.byteLength
+                });
+                
                 if (!chunk || typeof chunkSize === 'undefined') {
                     console.error(`Chunk validation failed:`, {
                         chunk: chunk,
@@ -1694,16 +1711,35 @@ async function sendFile(file) {
             }
         }
 
-        if (successCount > 0) {
-            // Store the file for later streaming download
-            sentFilesStore.set(fileId, file);
-            console.log(`File stored for streaming: ${fileId}`);
-            console.log(`File details stored:`, {
-                name: file.name,
-                size: file.size,
-                type: file.type
-            });
-            console.log(`Sent files store now contains:`, Array.from(sentFilesStore.keys()));
+                    if (successCount > 0) {
+                // Store the file for later streaming download
+                console.log(`About to store file:`, {
+                    fileId: fileId,
+                    file: file,
+                    fileType: typeof file,
+                    fileConstructor: file?.constructor?.name,
+                    fileSize: file?.size,
+                    fileName: file?.name
+                });
+                
+                sentFilesStore.set(fileId, file);
+                console.log(`File stored for streaming: ${fileId}`);
+                console.log(`File details stored:`, {
+                    name: file.name,
+                    size: file.size,
+                    type: file.type
+                });
+                console.log(`Sent files store now contains:`, Array.from(sentFilesStore.keys()));
+                
+                // Verify storage immediately
+                const storedFile = sentFilesStore.get(fileId);
+                console.log(`Immediately retrieved file:`, {
+                    storedFile: storedFile,
+                    storedFileType: typeof storedFile,
+                    storedFileConstructor: storedFile?.constructor?.name,
+                    storedFileSize: storedFile?.size,
+                    storedFileName: storedFile?.name
+                });
             
             showNotification(`${file.name} info sent successfully`, 'success');
         } else {
