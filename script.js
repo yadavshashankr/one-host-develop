@@ -897,6 +897,7 @@ function setupConnectionHandlers(conn) {
     });
 
     conn.on('data', async (data) => {
+        console.log(`Received data type: ${data.type}, fileId: ${data.fileId || 'N/A'}`);
         try {
             switch (data.type) {
                 case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST:
@@ -1024,7 +1025,9 @@ function generateFileId(file) {
 
 // Handle file header
 async function handleFileHeader(data) {
+    console.log(`=== HANDLE FILE HEADER START ===`);
     console.log('Received file header:', data);
+    
     fileChunks[data.fileId] = {
         chunks: [],
         fileName: data.fileName,
@@ -1041,6 +1044,8 @@ async function handleFileHeader(data) {
         chunksLength: 0
     });
     
+    console.log(`Global fileChunks after header:`, Object.keys(fileChunks));
+    
     elements.transferProgress.classList.add('hidden'); // Always hide
     updateProgress(0);
     updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
@@ -1048,15 +1053,20 @@ async function handleFileHeader(data) {
 
 // ✅ MODIFIED: Handle file chunks with streaming storage
 async function handleFileChunk(data) {
+    console.log(`=== HANDLE FILE CHUNK START ===`);
+    console.log(`Raw data received:`, data);
+    
     // Calculate chunk index from offset if not provided (backward compatibility)
     const chunkIndex = data.chunkIndex !== undefined ? data.chunkIndex : 
                       (data.offset !== undefined ? Math.floor(data.offset / (64 * 1024)) : 0);
     
     console.log(`Received chunk for ${data.fileId}, index: ${chunkIndex}, size: ${data.data?.byteLength || 0}, offset: ${data.offset || 'N/A'}`);
+    console.log(`Global fileChunks keys:`, Object.keys(fileChunks));
     
     const fileData = fileChunks[data.fileId];
     if (!fileData) {
         console.error(`No file data found for ${data.fileId}`);
+        console.error(`Available fileIds:`, Object.keys(fileChunks));
         return;
     }
 
