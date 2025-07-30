@@ -476,6 +476,20 @@ function checkUrlForPeerId() {
 // Store sent files for later download
 const sentFilesStore = new Map();
 
+// Debug function to check sentFilesStore
+function debugSentFilesStore() {
+    console.log(`=== SENT FILES STORE DEBUG ===`);
+    console.log(`Store size: ${sentFilesStore.size}`);
+    console.log(`Store keys:`, Array.from(sentFilesStore.keys()));
+    for (const [key, value] of sentFilesStore.entries()) {
+        console.log(`File ${key}:`, {
+            name: value.name,
+            size: value.size,
+            type: value.type
+        });
+    }
+}
+
 // ✅ NEW: Universal streaming download for all devices
 async function downloadFileUniversal(fileId, fileName, fileType, fileSize) {
     try {
@@ -917,6 +931,10 @@ function setupConnectionHandlers(conn) {
 
     conn.on('data', async (data) => {
         console.log(`Received data type: ${data.type}, fileId: ${data.fileId || 'N/A'}`);
+        if (data.type === 'streaming-request') {
+            console.log(`=== STREAMING REQUEST RECEIVED ===`);
+            console.log(`Request details:`, data);
+        }
         try {
             switch (data.type) {
                 case MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_REQUEST:
@@ -1426,7 +1444,9 @@ async function handleStreamingRequest(data, conn) {
         console.log(`=== HANDLE STREAMING REQUEST ===`);
         console.log(`Streaming request received for: ${data.fileName}`);
         console.log(`Requested fileId: ${data.fileId}`);
-        console.log(`Sent files store keys:`, Array.from(sentFilesStore.keys()));
+        
+        // Debug the sent files store
+        debugSentFilesStore();
         
         // Check if we have the file in our sent files store
         const fileId = data.fileId;
@@ -1635,6 +1655,12 @@ async function sendFile(file) {
             // Store the file for later streaming download
             sentFilesStore.set(fileId, file);
             console.log(`File stored for streaming: ${fileId}`);
+            console.log(`File details stored:`, {
+                name: file.name,
+                size: file.size,
+                type: file.type
+            });
+            console.log(`Sent files store now contains:`, Array.from(sentFilesStore.keys()));
             
             showNotification(`${file.name} info sent successfully`, 'success');
         } else {
