@@ -971,14 +971,23 @@ function setupConnectionHandlers(conn) {
                     await handleFileComplete(data);
                     break;
                 case 'blob-request':
-                    // Handle direct blob request
+                    // Handle direct blob request (fallback)
                     await handleBlobRequest(data, conn);
+                    break;
+                case 'streaming-request':
+                    // Handle streaming download request
+                    await handleStreamingRequest(data, conn);
                     break;
                 case 'blob-request-forwarded':
                     // Handle forwarded blob request (host only)
                     await handleForwardedBlobRequest(data, conn);
                     break;
                 case 'blob-error':
+                    showNotification(`Failed to download file: ${data.error}`, 'error');
+                    elements.transferProgress.classList.add('hidden');
+                    updateTransferInfo('');
+                    break;
+                case 'streaming-error':
                     showNotification(`Failed to download file: ${data.error}`, 'error');
                     elements.transferProgress.classList.add('hidden');
                     updateTransferInfo('');
@@ -1344,9 +1353,12 @@ async function handleBlobRequest(data, conn) {
     }
 }
 
-// Function to request and download a blob
+// ✅ MODIFIED: Function to request and download using streaming
 async function requestAndDownloadBlob(fileInfo) {
     try {
+        console.log(`=== STREAMING DOWNLOAD REQUEST ===`);
+        console.log(`Requesting streaming download for: ${fileInfo.name}`);
+        
         // Always try to connect to original sender directly
         let conn = connections.get(fileInfo.sharedBy);
         
@@ -1377,24 +1389,63 @@ async function requestAndDownloadBlob(fileInfo) {
             });
         }
 
-        // Now we should have a direct connection to the sender
-        elements.transferProgress.classList.add('hidden'); // Hide the progress bar
+        // Show progress for streaming download
+        elements.transferProgress.classList.remove('hidden');
         updateProgress(0, fileInfo.id);
-        updateTransferInfo('');
+        updateTransferInfo(`Requesting ${fileInfo.name}...`);
 
-        // Request the file directly
+        // Request streaming download
         conn.send({
-            type: 'blob-request',
+            type: 'streaming-request',
             fileId: fileInfo.id,
             fileName: fileInfo.name,
+            fileType: fileInfo.type,
+            fileSize: fileInfo.size,
             directRequest: true
         });
 
     } catch (error) {
-        console.error('Error requesting file:', error);
+        console.error('Error requesting streaming download:', error);
         showNotification(`Failed to download file: ${error.message}`, 'error');
         elements.transferProgress.classList.add('hidden');
         updateTransferInfo('');
+    }
+}
+
+// ✅ NEW: Handle streaming download request
+async function handleStreamingRequest(data, conn) {
+    try {
+        console.log(`=== HANDLE STREAMING REQUEST ===`);
+        console.log(`Streaming request received for: ${data.fileName}`);
+        
+        // Check if we have the file in our sent files store
+        const fileId = data.fileId;
+        const sentFile = sentFilesStore.get(fileId);
+        
+        if (!sentFile) {
+            console.error(`File ${fileId} not found in sent files store`);
+            conn.send({
+                type: 'streaming-error',
+                fileId: fileId,
+                error: 'File not found'
+            });
+            return;
+        }
+
+        console.log(`Starting streaming transfer for: ${data.fileName}`);
+        
+        // Start streaming the file
+        await sendFileStreaming(sentFile, conn, fileId);
+        
+        console.log(`Streaming transfer completed for: ${data.fileName}`);
+        
+    } catch (error) {
+        console.error('Error handling streaming request:', error);
+        conn.send({
+            type: 'streaming-error',
+            fileId: data.fileId,
+            error: error.message
+        });
     }
 }
 
@@ -1513,7 +1564,7 @@ async function processFileQueue() {
 }
 
 // Modify sendFile function to work with queue
-// ✅ MODIFIED: Update sendFile function to use streaming
+// ✅ REVERTED: Use original file transfer method (send info first, download on demand)
 async function sendFile(file) {
     if (connections.size === 0) {
         showNotification('Please connect to at least one peer first', 'error');
@@ -1536,26 +1587,46 @@ async function sendFile(file) {
         // Generate a unique file ID that will be same for all recipients
         const fileId = generateFileId(file);
         
-        // Send to all connected peers using streaming
+        // Send file info to all connected peers (original method)
         const sendPromises = [];
         let successCount = 0;
         const errors = [];
 
+        console.log(`Sending file info for ${file.name} to ${connections.size} peers`);
+
         for (const [peerId, conn] of connections) {
             if (conn && conn.open) {
                 try {
-                    await sendFileStreaming(file, conn, fileId);
+                    // Send file info (not the actual file)
+                    const fileInfo = {
+                        type: 'file-info',
+                        fileId: fileId,
+                        fileName: file.name,
+                        fileType: file.type,
+                        fileSize: file.size,
+                        originalSender: peer.id,
+                        timestamp: Date.now(),
+                        directDownload: true
+                    };
+                    
+                    conn.send(fileInfo);
                     successCount++;
+                    console.log(`File info sent to peer: ${peerId}`);
                 } catch (error) {
+                    console.error(`Error sending file info to peer ${peerId}:`, error);
                     errors.push(error.message);
                 }
             }
         }
 
         if (successCount > 0) {
-            showNotification(`${file.name} sent successfully`, 'success');
+            // Store the file for later streaming download
+            sentFilesStore.set(fileId, file);
+            console.log(`File stored for streaming: ${fileId}`);
+            
+            showNotification(`${file.name} info sent successfully`, 'success');
         } else {
-            throw new Error('Failed to send file to any peers: ' + errors.join(', '));
+            throw new Error('Failed to send file info to any peers: ' + errors.join(', '));
         }
     } catch (error) {
         console.error('File send error:', error);
