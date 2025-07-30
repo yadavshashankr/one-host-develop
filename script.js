@@ -211,33 +211,39 @@ function checkBrowserSupport() {
 // Initialize IndexedDB
 // ✅ ENHANCED: IndexedDB setup with file chunks support
 async function initIndexedDB() {
-    try {
-        const request = indexedDB.open(DB_NAME, DB_VERSION + 1); // Increment version for new store
-        
-        request.onerror = (event) => {
-            showNotification('IndexedDB initialization failed', 'error');
-        };
-
-        request.onupgradeneeded = (event) => {
-            const db = event.target.result;
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-            }
+    return new Promise((resolve, reject) => {
+        try {
+            const request = indexedDB.open(DB_NAME, DB_VERSION + 1); // Increment version for new store
             
-            // ✅ Create file chunks store for streaming downloads
-            if (!db.objectStoreNames.contains('fileChunks')) {
-                const store = db.createObjectStore('fileChunks', { keyPath: 'fileId' });
-                store.createIndex('timestamp', 'timestamp', { unique: false });
-            }
-        };
+            request.onerror = (event) => {
+                console.error('IndexedDB initialization failed:', event.target.error);
+                showNotification('IndexedDB initialization failed', 'error');
+                reject(event.target.error);
+            };
 
-        request.onsuccess = (event) => {
-            db = event.target.result;
-        };
-    } catch (error) {
-        console.error('IndexedDB Error:', error);
-        showNotification('Storage initialization failed', 'error');
-    }
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains(STORE_NAME)) {
+                    db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+                }
+                
+                // ✅ Create file chunks store for streaming downloads
+                if (!db.objectStoreNames.contains('fileChunks')) {
+                    const store = db.createObjectStore('fileChunks', { keyPath: 'fileId' });
+                    store.createIndex('timestamp', 'timestamp', { unique: false });
+                }
+            };
+
+            request.onsuccess = (event) => {
+                db = event.target.result;
+                resolve(db);
+            };
+        } catch (error) {
+            console.error('IndexedDB Error:', error);
+            showNotification('Storage initialization failed', 'error');
+            reject(error);
+        }
+    });
 }
 
 // ✅ NEW: Device detection functions
@@ -250,39 +256,131 @@ function isPWA() {
            window.navigator.standalone === true;
 }
 
+// ✅ NEW: Fallback storage for when IndexedDB fails
+const fallbackChunkStorage = new Map();
+
+// ✅ NEW: Check if IndexedDB is supported
+function isIndexedDBSupported() {
+    return 'indexedDB' in window;
+}
+
 // ✅ NEW: Store file chunks for streaming
 async function storeFileChunk(fileId, chunkData, chunkIndex) {
-    const db = await initIndexedDB();
-    const transaction = db.transaction(['fileChunks'], 'readwrite');
-    const store = transaction.objectStore('fileChunks');
-    
-    await store.put({
-        fileId: fileId,
-        chunkData: chunkData,
-        chunkIndex: chunkIndex,
-        timestamp: Date.now()
-    });
+    try {
+        // Try IndexedDB first
+        if (isIndexedDBSupported()) {
+            const db = await initIndexedDB();
+            if (db) {
+                const transaction = db.transaction(['fileChunks'], 'readwrite');
+                const store = transaction.objectStore('fileChunks');
+                
+                await store.put({
+                    fileId: fileId,
+                    chunkData: chunkData,
+                    chunkIndex: chunkIndex,
+                    timestamp: Date.now()
+                });
+                return;
+            }
+        }
+        
+        // Fallback to in-memory storage
+        if (!fallbackChunkStorage.has(fileId)) {
+            fallbackChunkStorage.set(fileId, []);
+        }
+        
+        const chunks = fallbackChunkStorage.get(fileId);
+        chunks.push({
+            fileId: fileId,
+            chunkData: chunkData,
+            chunkIndex: chunkIndex,
+            timestamp: Date.now()
+        });
+        
+        console.log('Using fallback storage for chunk', chunkIndex);
+        
+    } catch (error) {
+        console.error('Error storing file chunk:', error);
+        
+        // Fallback to in-memory storage on error
+        if (!fallbackChunkStorage.has(fileId)) {
+            fallbackChunkStorage.set(fileId, []);
+        }
+        
+        const chunks = fallbackChunkStorage.get(fileId);
+        chunks.push({
+            fileId: fileId,
+            chunkData: chunkData,
+            chunkIndex: chunkIndex,
+            timestamp: Date.now()
+        });
+        
+        console.log('Using fallback storage due to error');
+    }
 }
 
 // ✅ NEW: Get all chunks for a file
 async function getFileChunks(fileId) {
-    const db = await initIndexedDB();
-    const transaction = db.transaction(['fileChunks'], 'readonly');
-    const store = transaction.objectStore('fileChunks');
-    
-    const chunks = await store.getAll(IDBKeyRange.only(fileId));
-    
-    // Sort by chunk index to ensure correct order
-    return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+    try {
+        // Try IndexedDB first
+        if (isIndexedDBSupported()) {
+            const db = await initIndexedDB();
+            if (db) {
+                const transaction = db.transaction(['fileChunks'], 'readonly');
+                const store = transaction.objectStore('fileChunks');
+                
+                const chunks = await store.getAll(IDBKeyRange.only(fileId));
+                
+                // Sort by chunk index to ensure correct order
+                return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+            }
+        }
+        
+        // Fallback to in-memory storage
+        if (fallbackChunkStorage.has(fileId)) {
+            const chunks = fallbackChunkStorage.get(fileId);
+            return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        }
+        
+        return [];
+        
+    } catch (error) {
+        console.error('Error getting file chunks:', error);
+        
+        // Fallback to in-memory storage on error
+        if (fallbackChunkStorage.has(fileId)) {
+            const chunks = fallbackChunkStorage.get(fileId);
+            return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        }
+        
+        return [];
+    }
 }
 
 // ✅ NEW: Clean up file chunks
 async function cleanupFileChunks(fileId) {
-    const db = await initIndexedDB();
-    const transaction = db.transaction(['fileChunks'], 'readwrite');
-    const store = transaction.objectStore('fileChunks');
-    
-    await store.delete(IDBKeyRange.only(fileId));
+    try {
+        // Try IndexedDB first
+        if (isIndexedDBSupported()) {
+            const db = await initIndexedDB();
+            if (db) {
+                const transaction = db.transaction(['fileChunks'], 'readwrite');
+                const store = transaction.objectStore('fileChunks');
+                
+                await store.delete(IDBKeyRange.only(fileId));
+                return;
+            }
+        }
+        
+        // Fallback: clean up in-memory storage
+        fallbackChunkStorage.delete(fileId);
+        
+    } catch (error) {
+        console.error('Error cleaning up file chunks:', error);
+        
+        // Fallback: clean up in-memory storage
+        fallbackChunkStorage.delete(fileId);
+    }
 }
 
 // Generate QR Code
