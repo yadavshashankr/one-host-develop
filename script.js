@@ -1740,6 +1740,16 @@ async function sendFile(file) {
                     storedFileName: storedFile?.name
                 });
             
+            // Add file to UI history so it appears in sent files list
+            const fileInfo = {
+                id: fileId,
+                name: file.name,
+                type: file.type,
+                size: file.size,
+                sharedBy: peer.id
+            };
+            addFileToHistory(fileInfo, 'sent');
+            
             showNotification(`${file.name} info sent successfully`, 'success');
         } else {
             throw new Error('Failed to send file info to any peers: ' + errors.join(', '));
