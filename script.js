@@ -694,6 +694,9 @@ async function shareId() {
 // ✅ NEW: Streaming file transfer without memory accumulation
 async function sendFileStreaming(file, conn, fileId) {
     try {
+        console.log(`=== SEND FILE STREAMING START ===`);
+        console.log(`File: ${file.name}, Size: ${file.size}, ChunkSize: 64KB`);
+        
         if (!conn.open) {
             throw new Error('Connection is not open');
         }
@@ -708,11 +711,13 @@ async function sendFileStreaming(file, conn, fileId) {
             originalSender: peer.id,
             timestamp: Date.now()
         });
+        console.log(`File header sent for ${fileId}`);
 
         // Stream file in manageable chunks
         const chunkSize = 64 * 1024; // 64KB chunks (larger for efficiency)
         let offset = 0;
         let lastProgressUpdate = 0;
+        let chunkCount = 0;
 
         while (offset < file.size) {
             if (!conn.open) {
@@ -722,17 +727,21 @@ async function sendFileStreaming(file, conn, fileId) {
             // Read chunk without loading entire file
             const chunk = file.slice(offset, offset + chunkSize);
             const arrayBuffer = await chunk.arrayBuffer();
+            const chunkIndex = Math.floor(offset / chunkSize);
+
+            console.log(`Sending chunk ${chunkIndex}: offset=${offset}, size=${chunk.byteLength}, total=${file.size}`);
 
             conn.send({
                 type: 'file-chunk',
                 fileId: fileId,
                 data: arrayBuffer,
-                chunkIndex: Math.floor(offset / chunkSize), // ✅ Use chunkIndex instead of offset
+                chunkIndex: chunkIndex,
                 offset: offset,
                 total: file.size
             });
 
             offset += chunk.byteLength;
+            chunkCount++;
 
             // Update progress
             const currentProgress = (offset / file.size) * 100;
@@ -744,6 +753,8 @@ async function sendFileStreaming(file, conn, fileId) {
             // Small delay to prevent overwhelming the connection
             await new Promise(resolve => setTimeout(resolve, 1));
         }
+
+        console.log(`All chunks sent: ${chunkCount} chunks, total size: ${offset}`);
 
         // Send completion message
         conn.send({
@@ -983,6 +994,12 @@ function setupConnectionHandlers(conn) {
 
     conn.on('close', () => {
         console.log('Connection closed with:', conn.peer);
+        console.log('Connection close details:', {
+            peer: conn.peer,
+            open: conn.open,
+            readyState: conn.connectionState || 'unknown',
+            timestamp: new Date().toISOString()
+        });
         connections.delete(conn.peer);
         
         // Clear timeout for this connection
@@ -1002,6 +1019,11 @@ function setupConnectionHandlers(conn) {
 
     conn.on('error', (error) => {
         console.error('Connection Error:', error);
+        console.error('Connection state during error:', {
+            peer: conn.peer,
+            open: conn.open,
+            readyState: conn.connectionState || 'unknown'
+        });
         updateConnectionStatus('', 'Connection error');
         showNotification('Connection error occurred', 'error');
         
