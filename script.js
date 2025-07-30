@@ -720,38 +720,46 @@ async function sendFileStreaming(file, conn, fileId) {
         let chunkCount = 0;
 
         while (offset < file.size) {
-            if (!conn.open) {
-                throw new Error('Connection lost during transfer');
+            try {
+                if (!conn.open) {
+                    throw new Error('Connection lost during transfer');
+                }
+
+                // Read chunk without loading entire file
+                const chunk = file.slice(offset, offset + chunkSize);
+                const arrayBuffer = await chunk.arrayBuffer();
+                const chunkIndex = Math.floor(offset / chunkSize);
+
+                console.log(`Sending chunk ${chunkIndex}: offset=${offset}, size=${chunk.byteLength}, total=${file.size}, connection open: ${conn.open}`);
+
+                conn.send({
+                    type: 'file-chunk',
+                    fileId: fileId,
+                    data: arrayBuffer,
+                    chunkIndex: chunkIndex,
+                    offset: offset,
+                    total: file.size
+                });
+
+                offset += chunk.byteLength;
+                chunkCount++;
+
+                console.log(`Chunk ${chunkIndex} sent successfully, new offset: ${offset}`);
+
+                // Update progress
+                const currentProgress = (offset / file.size) * 100;
+                if (currentProgress - lastProgressUpdate >= 1) {
+                    updateProgress(currentProgress, fileId);
+                    lastProgressUpdate = currentProgress;
+                }
+
+                // Small delay to prevent overwhelming the connection
+                await new Promise(resolve => setTimeout(resolve, 1));
+                
+            } catch (error) {
+                console.error(`Error sending chunk at offset ${offset}:`, error);
+                throw new Error(`Failed to send chunk at offset ${offset}: ${error.message}`);
             }
-
-            // Read chunk without loading entire file
-            const chunk = file.slice(offset, offset + chunkSize);
-            const arrayBuffer = await chunk.arrayBuffer();
-            const chunkIndex = Math.floor(offset / chunkSize);
-
-            console.log(`Sending chunk ${chunkIndex}: offset=${offset}, size=${chunk.byteLength}, total=${file.size}`);
-
-            conn.send({
-                type: 'file-chunk',
-                fileId: fileId,
-                data: arrayBuffer,
-                chunkIndex: chunkIndex,
-                offset: offset,
-                total: file.size
-            });
-
-            offset += chunk.byteLength;
-            chunkCount++;
-
-            // Update progress
-            const currentProgress = (offset / file.size) * 100;
-            if (currentProgress - lastProgressUpdate >= 1) {
-                updateProgress(currentProgress, fileId);
-                lastProgressUpdate = currentProgress;
-            }
-
-            // Small delay to prevent overwhelming the connection
-            await new Promise(resolve => setTimeout(resolve, 1));
         }
 
         console.log(`All chunks sent: ${chunkCount} chunks, total size: ${offset}`);
@@ -1417,6 +1425,8 @@ async function handleStreamingRequest(data, conn) {
     try {
         console.log(`=== HANDLE STREAMING REQUEST ===`);
         console.log(`Streaming request received for: ${data.fileName}`);
+        console.log(`Requested fileId: ${data.fileId}`);
+        console.log(`Sent files store keys:`, Array.from(sentFilesStore.keys()));
         
         // Check if we have the file in our sent files store
         const fileId = data.fileId;
@@ -1424,14 +1434,16 @@ async function handleStreamingRequest(data, conn) {
         
         if (!sentFile) {
             console.error(`File ${fileId} not found in sent files store`);
+            console.error(`Available files:`, Array.from(sentFilesStore.keys()));
             conn.send({
                 type: 'streaming-error',
                 fileId: fileId,
-                error: 'File not found'
+                error: 'File not found in sent files store'
             });
             return;
         }
 
+        console.log(`File found in store: ${sentFile.name}, size: ${sentFile.size}`);
         console.log(`Starting streaming transfer for: ${data.fileName}`);
         
         // Start streaming the file
