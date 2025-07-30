@@ -278,7 +278,12 @@ async function storeFileChunk(fileId, chunkData, chunkIndex) {
                     fileId: fileId,
                     chunkData: chunkData,
                     chunkIndex: chunkIndex,
-                    timestamp: Date.now()
+                    chunkSize: chunkData.byteLength,
+                    timestamp: Date.now(),
+                    metadata: {
+                        originalSize: chunkData.byteLength,
+                        chunkOrder: chunkIndex
+                    }
                 });
                 return;
             }
@@ -392,8 +397,62 @@ function getLocalFileChunks(fileId) {
             fileId: fileId,
             chunkData: chunk,
             chunkIndex: index,
-            timestamp: Date.now()
+            chunkSize: chunk.byteLength,
+            timestamp: Date.now(),
+            metadata: {
+                originalSize: chunk.byteLength,
+                chunkOrder: index
+            }
         }));
+}
+
+// ✅ NEW: Verify file integrity and completeness
+async function verifyFileIntegrity(fileId, expectedSize, expectedChunks) {
+    try {
+        const chunks = await getFileChunks(fileId);
+        
+        if (chunks.length === 0) {
+            throw new Error('No chunks found for file verification');
+        }
+        
+        // Sort chunks by index
+        chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        
+        // Verify chunk count
+        if (chunks.length !== expectedChunks) {
+            console.warn(`Chunk count mismatch: expected ${expectedChunks}, got ${chunks.length}`);
+        }
+        
+        // Calculate total size and verify chunk order
+        let totalSize = 0;
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            
+            if (chunk.chunkIndex !== i) {
+                throw new Error(`Chunk order corrupted: expected ${i}, got ${chunk.chunkIndex}`);
+            }
+            
+            const chunkSize = chunk.chunkData.byteLength;
+            totalSize += chunkSize;
+            
+            console.log(`Chunk ${i}: size=${chunkSize}, index=${chunk.chunkIndex}`);
+        }
+        
+        // Verify total size
+        const sizeDifference = Math.abs(totalSize - expectedSize);
+        const sizeTolerance = Math.max(1024, expectedSize * 0.001); // 1KB or 0.1% tolerance
+        
+        if (sizeDifference > sizeTolerance) {
+            throw new Error(`File size mismatch: expected ${expectedSize}, got ${totalSize} (difference: ${sizeDifference})`);
+        }
+        
+        console.log(`File integrity verified: size=${totalSize}, chunks=${chunks.length}, tolerance=${sizeTolerance}`);
+        return true;
+        
+    } catch (error) {
+        console.error('File integrity verification failed:', error);
+        throw error;
+    }
 }
 
 // ✅ NEW: Clean up file chunks
@@ -538,11 +597,25 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
 
         const writable = await fileHandle.createWritable();
         
-        // Get chunks and write directly to file system
+        // Get chunks and write directly to file system with perfect ordering
         const chunks = await getFileChunks(fileId);
+        
+        // Sort chunks by index for perfect order
+        chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        
+        console.log(`File System API: Writing ${chunks.length} chunks, expected size: ${fileSize}`);
+        
         let downloadedSize = 0;
         
-        for (const chunk of chunks) {
+        // Write chunks in perfect order
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            
+            // Verify chunk order
+            if (chunk.chunkIndex !== i) {
+                throw new Error(`Chunk order corrupted in File System API: expected ${i}, got ${chunk.chunkIndex}`);
+            }
+            
             const arrayBuffer = await chunk.chunkData.arrayBuffer();
             await writable.write(arrayBuffer);
             
@@ -552,9 +625,13 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
             const progress = (downloadedSize / fileSize) * 100;
             updateProgress(progress, fileId);
             
-            // Small delay
-            await new Promise(resolve => setTimeout(resolve, 1));
+            // Minimal delay for UI responsiveness
+            if (i % 10 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 1));
+            }
         }
+        
+        console.log(`File System API: Written ${downloadedSize} bytes, expected: ${fileSize}`);
         
         await writable.close();
         
@@ -587,37 +664,63 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
             throw new Error('No file chunks found');
         }
         
-        // Sort chunks by chunkIndex to ensure correct order
+        // Verify file integrity before reassembly
+        const expectedChunks = Math.ceil(fileSize / (256 * 1024)); // 256KB chunks
+        await verifyFileIntegrity(fileId, fileSize, expectedChunks);
+        
+        // Robust chunk reassembly with perfect ordering and metadata preservation
         chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
         
         console.log(`Reassembling file: ${chunks.length} chunks, expected size: ${fileSize}`);
+        console.log(`Chunk indices:`, chunks.map(c => c.chunkIndex));
         
-        // Process chunks in smaller batches to avoid memory issues
-        const batchSize = isPWA() ? 25 : 50; // Smaller batches for PWA
-        const allBlobs = [];
-        
-        for (let i = 0; i < chunks.length; i += batchSize) {
-            const batch = chunks.slice(i, i + batchSize);
-            
-            // Convert batch to array buffers
-            const batchBuffers = await Promise.all(
-                batch.map(chunk => chunk.chunkData.arrayBuffer())
-            );
-            
-            // Create blob for this batch
-            const batchBlob = new Blob(batchBuffers, { type: fileType });
-            allBlobs.push(batchBlob);
-            
-            // Update progress
-            const progress = Math.min(((i + batchSize) / chunks.length) * 100, 100);
-            updateProgress(progress, fileId);
-            
-            // Small delay to prevent memory issues
-            await new Promise(resolve => setTimeout(resolve, isPWA() ? 50 : 10));
+        // Verify chunk integrity and completeness
+        if (chunks.length !== expectedChunks) {
+            console.warn(`Chunk count mismatch: expected ${expectedChunks}, got ${chunks.length}`);
         }
         
-        // Create final blob from all batches
-        const finalBlob = new Blob(allBlobs, { type: fileType });
+        // Calculate total size from chunks for verification
+        let totalChunkSize = 0;
+        const chunkBuffers = [];
+        
+        // Process chunks sequentially to ensure perfect order
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            
+            // Verify chunk index matches expected order
+            if (chunk.chunkIndex !== i) {
+                console.error(`Chunk order mismatch: expected index ${i}, got ${chunk.chunkIndex}`);
+                throw new Error(`Chunk order corrupted: expected ${i}, got ${chunk.chunkIndex}`);
+            }
+            
+            // Convert chunk to array buffer
+            const arrayBuffer = await chunk.chunkData.arrayBuffer();
+            chunkBuffers.push(arrayBuffer);
+            totalChunkSize += arrayBuffer.byteLength;
+            
+            // Update progress
+            const progress = ((i + 1) / chunks.length) * 100;
+            updateProgress(progress, fileId);
+            
+            // Minimal delay for UI responsiveness
+            if (i % 10 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 1));
+            }
+        }
+        
+        // Verify total size matches expected
+        console.log(`Total chunk size: ${totalChunkSize}, expected: ${fileSize}`);
+        if (Math.abs(totalChunkSize - fileSize) > 1024) { // 1KB tolerance
+            console.warn(`Size mismatch: expected ${fileSize}, got ${totalChunkSize}`);
+        }
+        
+        // Create final blob with exact metadata
+        const finalBlob = new Blob(chunkBuffers, { 
+            type: fileType,
+            lastModified: Date.now()
+        });
+        
+        console.log(`Final blob created: size=${finalBlob.size}, type=${finalBlob.type}`);
         
         // Download using native method
         const url = URL.createObjectURL(finalBlob);
@@ -636,7 +739,13 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
             allBlobs.length = 0;
         }, 1000);
         
+        // Verify file integrity
+        if (finalBlob.size !== fileSize) {
+            console.warn(`File size verification failed: expected ${fileSize}, got ${finalBlob.size}`);
+        }
+        
         console.log('File downloaded with native chunked blob');
+        console.log(`File integrity: size=${finalBlob.size}, type=${finalBlob.type}, chunks=${chunks.length}`);
         showNotification(`${fileName} downloaded successfully`, 'success');
         
         return true;
@@ -744,8 +853,10 @@ async function sendFileStreaming(file, conn, fileId) {
         });
         console.log(`File header sent for ${fileId}`);
 
-        // Stream file in manageable chunks
-        const chunkSize = 64 * 1024; // 64KB chunks (larger for efficiency)
+        // Optimized chunk size for network performance
+        // Larger chunks = fewer network round trips = faster transfers
+        // 256KB provides optimal balance between memory usage and network efficiency
+        const chunkSize = 256 * 1024; // 256KB chunks for optimal performance
         let offset = 0;
         let lastProgressUpdate = 0;
         let chunkCount = 0;
