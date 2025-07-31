@@ -607,32 +607,6 @@ function checkFileTransferStatus(fileId, fileName) {
     
     return true;
 }
-    console.log(`=== FILE TRANSFER STATUS CHECK ===`);
-    console.log(`Checking transfer status for: ${fileName} (${fileId})`);
-    
-    // Check if there are any active connections
-    const activeConnections = Array.from(connections.values()).filter(conn => conn.open);
-    console.log(`Active connections: ${activeConnections.length}`);
-    
-    if (activeConnections.length === 0) {
-        console.warn(`No active connections found - file transfer may have failed`);
-        showNotification('No active connection found. Please ensure both devices are connected.', 'warning');
-        return false;
-    }
-    
-    // Check if the file was ever in the transfer queue
-    console.log(`Checking if file was in transfer queue...`);
-    
-    // Check if there are any recent file transfer activities
-    const recentActivity = sessionStorage.getItem('recentFileTransfers');
-    if (recentActivity) {
-        console.log(`Recent file transfer activity:`, recentActivity);
-    } else {
-        console.log(`No recent file transfer activity found`);
-    }
-    
-    return true;
-}
 
 // ✅ NEW: Check if file was actually received
 function checkIfFileWasReceived(fileId, fileName) {
