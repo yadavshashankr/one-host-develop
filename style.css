@@ -588,6 +588,70 @@ input[type="file"] {
 
 /* ===== PWA INSTALLATION STYLES ===== */
 
+/* PWA Indicator Icon */
+.pwa-indicator {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: linear-gradient(135deg, #2196F3, #1976D2);
+    color: white;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(33, 150, 243, 0.4);
+    transition: all 0.3s ease;
+    z-index: 1001;
+    animation: pulse 2s infinite;
+    /* Ensure visibility with proper spacing */
+    margin: 0;
+    padding: 0;
+    /* Add safe distance from viewport edges */
+    top: calc(20px + env(safe-area-inset-top, 0px));
+    right: calc(20px + env(safe-area-inset-right, 0px));
+}
+
+.pwa-indicator:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 16px rgba(33, 150, 243, 0.5);
+}
+
+.pwa-indicator .material-icons {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.pwa-indicator.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(0.8);
+}
+
+.pwa-indicator.update-available {
+    background: linear-gradient(135deg, #FF9800, #F57C00);
+    animation: pulse-orange 2s infinite;
+}
+
+.pwa-indicator.update-available .material-icons {
+    content: "update";
+}
+
+/* Pulse animation for update indicator */
+@keyframes pulse-orange {
+    0% {
+        box-shadow: 0 4px 12px rgba(255, 152, 0, 0.4);
+    }
+    50% {
+        box-shadow: 0 4px 12px rgba(255, 152, 0, 0.7);
+    }
+    100% {
+        box-shadow: 0 4px 12px rgba(255, 152, 0, 0.4);
+    }
+}
+
 .pwa-install-container {
     position: fixed;
     top: 0;
@@ -1011,5 +1075,32 @@ input[type="file"] {
     .mobile-device button:active,
     .mobile-device .icon-button:active {
         transform: none;
+    }
+}
+
+/* Mobile PWA indicator adjustments */
+@media (max-width: 768px) {
+    .pwa-indicator {
+        width: 56px;
+        height: 56px;
+        top: 16px;
+        right: 16px;
+    }
+    
+    .pwa-indicator .material-icons {
+        font-size: 28px;
+    }
+}
+
+@media (max-width: 480px) {
+    .pwa-indicator {
+        width: 52px;
+        height: 52px;
+        top: 12px;
+        right: 12px;
+    }
+    
+    .pwa-indicator .material-icons {
+        font-size: 26px;
     }
 }

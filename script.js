@@ -3432,6 +3432,7 @@ class PWAManager {
         this.setupEventListeners();
         this.createInstallButton();
         this.setupServiceWorker();
+        this.setupIndicator();
     }
 
     // Check if PWA is already installed
@@ -3442,6 +3443,7 @@ class PWAManager {
             this.isInstalled = true;
             console.log('PWA: Running in standalone mode (installed)');
             this.hideInstallButton();
+            this.updateIndicatorVisibility();
             return;
         }
 
@@ -3456,6 +3458,7 @@ class PWAManager {
             this.isInstalled = true;
             console.log('PWA: Previously installed (localStorage)');
             this.hideInstallButton();
+            this.updateIndicatorVisibility();
         }
     }
 
@@ -3467,7 +3470,7 @@ class PWAManager {
             e.preventDefault();
             this.deferredPrompt = e;
             this.isInstallable = true;
-            this.showInstallButton();
+            this.updateIndicatorVisibility();
         });
 
         // Listen for appinstalled event
@@ -3478,6 +3481,7 @@ class PWAManager {
             this.deferredPrompt = null;
             localStorage.setItem('pwa-installed', 'true');
             this.hideInstallButton();
+            this.updateIndicatorVisibility();
             this.showInstallationSuccess();
         });
 
@@ -3487,6 +3491,7 @@ class PWAManager {
                 console.log('PWA: Switched to standalone mode');
                 this.isInstalled = true;
                 this.hideInstallButton();
+                this.updateIndicatorVisibility();
             }
         });
 
@@ -3537,6 +3542,60 @@ class PWAManager {
 
         if (dismissButton) {
             dismissButton.addEventListener('click', () => this.dismissInstallPrompt());
+        }
+    }
+
+    // Setup PWA indicator
+    setupIndicator() {
+        this.indicator = document.getElementById('pwa-indicator');
+        if (this.indicator) {
+            this.indicator.addEventListener('click', () => this.handleIndicatorClick());
+            this.updateIndicatorVisibility();
+        }
+    }
+
+    // Handle indicator click
+    handleIndicatorClick() {
+        if (this.isInstalled) {
+            // Check for updates if installed
+            this.checkForUpdates();
+        } else if (this.isInstallable && this.deferredPrompt) {
+            // Show install banner
+            this.showInstallButton();
+        }
+    }
+
+    // Check for PWA updates
+    checkForUpdates() {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistration().then(registration => {
+                if (registration) {
+                    registration.update();
+                    showNotification('Checking for updates...', 'info');
+                }
+            });
+        }
+    }
+
+    // Update indicator visibility and state
+    updateIndicatorVisibility() {
+        if (!this.indicator) return;
+
+        if (this.isInstalled) {
+            // Show update indicator if installed
+            this.indicator.classList.remove('hidden');
+            this.indicator.classList.add('update-available');
+            this.indicator.querySelector('.material-icons').textContent = 'update';
+            this.indicator.title = 'Check for One-Host updates';
+        } else if (this.isInstallable && this.deferredPrompt) {
+            // Show install indicator if installable
+            this.indicator.classList.remove('hidden');
+            this.indicator.classList.remove('update-available');
+            this.indicator.querySelector('.material-icons').textContent = 'download';
+            this.indicator.title = 'Install One-Host App';
+        } else {
+            // Hide indicator if not applicable
+            this.indicator.classList.add('hidden');
         }
     }
 
@@ -3593,8 +3652,8 @@ class PWAManager {
     // Dismiss install prompt
     dismissInstallPrompt() {
         this.hideInstallButton();
-        // Don't show again for 24 hours
-        localStorage.setItem('pwa-install-dismissed', Date.now().toString());
+        // Allow showing again when indicator is clicked
+        // No cooldown period - user can click indicator to show again
     }
 
     // Show installation success
@@ -3920,17 +3979,6 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Initialize mobile optimizer
     mobileOptimizer = new MobileOptimizer();
-    
-    // Check if install prompt was recently dismissed
-    const dismissedTime = localStorage.getItem('pwa-install-dismissed');
-    if (dismissedTime) {
-        const hoursSinceDismissed = (Date.now() - parseInt(dismissedTime)) / (1000 * 60 * 60);
-        if (hoursSinceDismissed < 24) {
-            console.log('PWA: Install prompt recently dismissed, not showing');
-        } else {
-            localStorage.removeItem('pwa-install-dismissed');
-        }
-    }
 });
 
 // Export PWA manager for global access

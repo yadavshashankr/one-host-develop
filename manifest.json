@@ -1,6 +1,7 @@
 {
   "name": "One-Host - Secure P2P File Transfer",
   "short_name": "One-Host",
+  "version": "2.0.0",
   "description": "Share files instantly and securely between devices using peer-to-peer WebRTC technology. Support for large files up to 5GB.",
   "start_url": "./",
   "scope": "./",
