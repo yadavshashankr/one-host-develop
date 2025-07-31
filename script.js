@@ -227,6 +227,13 @@ async function initIndexedDB() {
                     const store = db.createObjectStore('fileChunks', { keyPath: 'fileId' });
                     store.createIndex('timestamp', 'timestamp', { unique: false });
                 }
+                
+                // ✅ Create large files store for mobile downloads
+                if (!db.objectStoreNames.contains('largeFiles')) {
+                    const largeFilesStore = db.createObjectStore('largeFiles', { keyPath: 'id' });
+                    largeFilesStore.createIndex('timestamp', 'timestamp', { unique: false });
+                    largeFilesStore.createIndex('name', 'name', { unique: false });
+                }
             };
 
             request.onsuccess = (event) => {
@@ -3126,6 +3133,72 @@ function reconnectToPeer(peerId) {
     }
 }
 
+// Function to download large file using File System Access API
+async function downloadLargeFileWithFileSystemAPI(blob, fileName) {
+    try {
+        // Check if File System Access API is supported
+        if ('showSaveFilePicker' in window) {
+            // Let user choose where to save the file
+            const fileHandle = await window.showSaveFilePicker({
+                suggestedName: fileName,
+                types: [{
+                    description: 'File',
+                    accept: {
+                        [blob.type || 'application/octet-stream']: [`.${fileName.split('.').pop()}`]
+                    }
+                }]
+            });
+            
+            // Create writable stream
+            const writable = await fileHandle.createWritable();
+            
+            // Write the blob data
+            await writable.write(blob);
+            await writable.close();
+            
+            showNotification('File saved successfully!', 'success');
+            return true;
+        }
+        return false;
+    } catch (error) {
+        console.error('File System Access API error:', error);
+        return false;
+    }
+}
+
+// Function to download large file using IndexedDB
+async function downloadLargeFileWithIndexedDB(blob, fileName) {
+    try {
+        const db = await initIndexedDB();
+        const transaction = db.transaction(['largeFiles'], 'readwrite');
+        const store = transaction.objectStore('largeFiles');
+        
+        // Store file metadata and blob
+        await store.put({
+            id: fileName + '_' + Date.now(),
+            name: fileName,
+            blob: blob,
+            size: blob.size,
+            type: blob.type,
+            timestamp: Date.now()
+        });
+        
+        // Create a download link for the stored file
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        
+        URL.revokeObjectURL(url);
+        showNotification('File downloaded and stored locally!', 'success');
+        return true;
+    } catch (error) {
+        console.error('IndexedDB error:', error);
+        return false;
+    }
+}
+
 // Function to share file on mobile devices
 async function shareFileOnMobile(blob, fileName) {
     try {
@@ -3159,18 +3232,38 @@ async function shareFileOnMobile(blob, fileName) {
 
 // Function to download a blob
 function downloadBlob(blob, fileName, fileId) {
-    // On mobile devices, always use share intent
+    // On mobile devices, use enhanced download system
     if (isMobileDevice()) {
-        shareFileOnMobile(blob, fileName).then(shared => {
-            if (!shared) {
-                // If sharing fails, show error notification
-                showNotification('Unable to share file. Please try again.', 'error');
-            }
-        });
+        downloadLargeFileMobile(blob, fileName);
     } else {
         // On desktop, use regular download
         performRegularDownload(blob, fileName, fileId);
     }
+}
+
+// Enhanced mobile download function with multiple fallbacks
+async function downloadLargeFileMobile(blob, fileName) {
+    // For large files (>10MB), try File System Access API first
+    if (blob.size > 10 * 1024 * 1024) {
+        // Try File System Access API (best option for large files)
+        if (await downloadLargeFileWithFileSystemAPI(blob, fileName)) {
+            return true;
+        }
+        
+        // Try IndexedDB for large files
+        if (await downloadLargeFileWithIndexedDB(blob, fileName)) {
+            return true;
+        }
+    }
+    
+    // For smaller files or if large file methods fail, try Web Share API
+    if (await shareFileOnMobile(blob, fileName)) {
+        return true;
+    }
+    
+    // Final fallback: show error
+    showNotification('Unable to save file. Please try on desktop or use a different browser.', 'error');
+    return false;
 }
 
 // Function to perform regular download (desktop or fallback)
@@ -3217,6 +3310,58 @@ function performRegularDownload(blob, fileName, fileId) {
 
     // Cleanup the download URL
     setTimeout(() => URL.revokeObjectURL(url), 100);
+}
+
+// Function to get stored large files
+async function getStoredLargeFiles() {
+    try {
+        const db = await initIndexedDB();
+        const transaction = db.transaction(['largeFiles'], 'readonly');
+        const store = transaction.objectStore('largeFiles');
+        const files = await store.getAll();
+        return files.sort((a, b) => b.timestamp - a.timestamp); // Newest first
+    } catch (error) {
+        console.error('Error getting stored files:', error);
+        return [];
+    }
+}
+
+// Function to delete stored large file
+async function deleteStoredLargeFile(fileId) {
+    try {
+        const db = await initIndexedDB();
+        const transaction = db.transaction(['largeFiles'], 'readwrite');
+        const store = transaction.objectStore('largeFiles');
+        await store.delete(fileId);
+        showNotification('File deleted successfully!', 'success');
+        return true;
+    } catch (error) {
+        console.error('Error deleting stored file:', error);
+        showNotification('Failed to delete file', 'error');
+        return false;
+    }
+}
+
+// Function to re-download stored large file
+async function redownloadStoredLargeFile(fileId) {
+    try {
+        const db = await initIndexedDB();
+        const transaction = db.transaction(['largeFiles'], 'readonly');
+        const store = transaction.objectStore('largeFiles');
+        const file = await store.get(fileId);
+        
+        if (file && file.blob) {
+            downloadBlob(file.blob, file.name, fileId);
+            return true;
+        } else {
+            showNotification('File not found in storage', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Error re-downloading stored file:', error);
+        showNotification('Failed to re-download file', 'error');
+        return false;
+    }
 }
 
 // Function to handle simultaneous download request
