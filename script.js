@@ -3426,6 +3426,7 @@ class PWAManager {
         this.installButton = null;
         this.updateAvailable = false;
         this.lastUpdateCheck = null;
+        this.notificationShown = false;
         this.init();
     }
 
@@ -3435,6 +3436,7 @@ class PWAManager {
         this.createInstallButton();
         this.setupServiceWorker();
         this.setupIndicator();
+        this.setupPageRefreshDetection();
     }
 
     // Check if PWA is already installed
@@ -3461,6 +3463,9 @@ class PWAManager {
             console.log('PWA: Previously installed (localStorage)');
             this.hideInstallButton();
             this.updateIndicatorVisibility();
+        } else {
+            // Reset notification flag if not installed
+            this.notificationShown = false;
         }
     }
 
@@ -3521,7 +3526,7 @@ class PWAManager {
                     </div>
                     <div class="pwa-install-text">
                         <h3>Install One-Host</h3>
-                        <p>Get the best experience with our app. Support for large file transfers up to 5GB.</p>
+                        <p>Get the best experience with our (PWA) progressive web app. Supports for background file transfers. Higher file size limits and more!</p>
                     </div>
                     <div class="pwa-install-actions">
                         <button id="pwa-install-btn" class="pwa-install-btn primary">Install App</button>
@@ -3652,14 +3657,17 @@ class PWAManager {
 
     // Show installation success
     showInstallationSuccess() {
-        showNotification('One-Host installed successfully! You can now use it like a native app.', 'success');
-        
-        // Show platform-specific instructions
-        if (isMobileDevice()) {
-            if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
-                showNotification('Tip: Add to home screen for the best experience', 'info');
-            } else {
-                showNotification('Tip: App is now installed on your device', 'info');
+        if (!this.notificationShown) {
+            showNotification('One-Host installed successfully! You can now use it like a native app.', 'success');
+            this.notificationShown = true;
+            
+            // Show platform-specific instructions
+            if (isMobileDevice()) {
+                if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
+                    showNotification('Tip: Add to home screen for the best experience', 'info');
+                } else {
+                    showNotification('Tip: App is now installed on your device', 'info');
+                }
             }
         }
     }
@@ -3729,6 +3737,31 @@ class PWAManager {
                 }
             });
         }
+    }
+
+    // Setup page refresh detection
+    setupPageRefreshDetection() {
+        // Check PWA status on page load/refresh
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                this.checkInstallationStatus();
+                this.updateIndicatorVisibility();
+            }, 1000); // Small delay to ensure all components are loaded
+        });
+
+        // Check on visibility change (when user returns to tab)
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                this.checkInstallationStatus();
+                this.updateIndicatorVisibility();
+            }
+        });
+
+        // Check on focus (when window gains focus)
+        window.addEventListener('focus', () => {
+            this.checkInstallationStatus();
+            this.updateIndicatorVisibility();
+        });
     }
 
     // Show update notification
