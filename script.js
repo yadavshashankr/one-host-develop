@@ -2932,15 +2932,8 @@ function updateFilesList(listElement, fileInfo, type) {
     
     const downloadBtn = document.createElement('button');
     downloadBtn.className = 'icon-button';
-    
-    // Use share icon on mobile devices, download icon on desktop
-    if (isMobileDevice()) {
-        downloadBtn.title = 'Share file';
-        downloadBtn.innerHTML = '<span class="material-icons">share</span>';
-    } else {
-        downloadBtn.title = 'Download file';
-        downloadBtn.innerHTML = '<span class="material-icons">download</span>';
-    }
+    downloadBtn.title = 'Download file';
+    downloadBtn.innerHTML = '<span class="material-icons">download</span>';
     
     downloadBtn.onclick = async () => {
         try {
@@ -3166,12 +3159,12 @@ async function shareFileOnMobile(blob, fileName) {
 
 // Function to download a blob
 function downloadBlob(blob, fileName, fileId) {
-    // On mobile devices, try to share the file first
+    // On mobile devices, always use share intent
     if (isMobileDevice()) {
         shareFileOnMobile(blob, fileName).then(shared => {
             if (!shared) {
-                // Fallback to regular download if sharing failed
-                performRegularDownload(blob, fileName, fileId);
+                // If sharing fails, show error notification
+                showNotification('Unable to share file. Please try again.', 'error');
             }
         });
     } else {
@@ -3182,6 +3175,18 @@ function downloadBlob(blob, fileName, fileId) {
 
 // Function to perform regular download (desktop or fallback)
 function performRegularDownload(blob, fileName, fileId) {
+    // On mobile, prevent navigation and use share intent
+    if (isMobileDevice()) {
+        shareFileOnMobile(blob, fileName).then(shared => {
+            if (!shared) {
+                // If sharing fails, show error notification
+                showNotification('Unable to share file. Please try again.', 'error');
+            }
+        });
+        return;
+    }
+
+    // Desktop download logic
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
