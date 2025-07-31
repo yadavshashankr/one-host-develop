@@ -585,3 +585,431 @@ input[type="file"] {
 .icon-button:disabled:hover {
     background-color: transparent;
 }
+
+/* ===== PWA INSTALLATION STYLES ===== */
+
+.pwa-install-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(10px);
+    transition: all 0.3s ease;
+}
+
+.pwa-install-container.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-100%);
+}
+
+.pwa-install-banner {
+    background: linear-gradient(135deg, #2196F3, #1976D2);
+    color: white;
+    padding: 16px;
+    box-shadow: 0 4px 20px rgba(33, 150, 243, 0.3);
+}
+
+.pwa-install-content {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.pwa-install-icon {
+    flex-shrink: 0;
+}
+
+.pwa-install-icon img {
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.pwa-install-text {
+    flex: 1;
+}
+
+.pwa-install-text h3 {
+    margin: 0 0 4px 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.pwa-install-text p {
+    margin: 0;
+    font-size: 14px;
+    opacity: 0.9;
+    line-height: 1.4;
+}
+
+.pwa-install-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.pwa-install-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.pwa-install-btn.primary {
+    background: white;
+    color: #2196F3;
+}
+
+.pwa-install-btn.primary:hover {
+    background: #f5f5f5;
+    transform: translateY(-1px);
+}
+
+.pwa-install-btn.secondary {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.pwa-install-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* PWA Update Notification */
+.pwa-update-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 9999;
+    background: #4CAF50;
+    color: white;
+    padding: 12px 16px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+    animation: slideInUp 0.3s ease;
+}
+
+.pwa-update-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.pwa-update-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.pwa-update-btn {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.pwa-update-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* ===== MOBILE OPTIMIZATIONS ===== */
+
+/* Mobile device specific styles */
+.mobile-device {
+    --safe-area-inset-top: env(safe-area-inset-top);
+    --safe-area-inset-bottom: env(safe-area-inset-bottom);
+    --safe-area-inset-left: env(safe-area-inset-left);
+    --safe-area-inset-right: env(safe-area-inset-right);
+}
+
+.mobile-device .container {
+    padding-top: var(--safe-area-inset-top);
+    padding-bottom: var(--safe-area-inset-bottom);
+    padding-left: var(--safe-area-inset-left);
+    padding-right: var(--safe-area-inset-right);
+}
+
+/* Touch optimizations */
+.mobile-device button,
+.mobile-device .icon-button {
+    min-height: 44px;
+    min-width: 44px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-device button:active,
+.mobile-device .icon-button:active {
+    transform: scale(0.95);
+}
+
+/* Mobile file input optimization */
+.mobile-device #file-input {
+    font-size: 16px; /* Prevents zoom on iOS */
+}
+
+/* Mobile layout adjustments */
+@media (max-width: 768px) {
+    .pwa-install-content {
+        flex-direction: column;
+        text-align: center;
+        gap: 12px;
+    }
+    
+    .pwa-install-actions {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .pwa-install-btn {
+        flex: 1;
+        max-width: 120px;
+    }
+    
+    /* Adjust main layout for mobile */
+    .container {
+        padding: 16px;
+        max-width: 100%;
+    }
+    
+    /* Optimize file list for mobile */
+    .file-list {
+        margin: 16px 0;
+    }
+    
+    .file-list li {
+        padding: 12px;
+        margin-bottom: 8px;
+        border-radius: 8px;
+    }
+    
+    /* Optimize buttons for mobile */
+    .icon-button {
+        padding: 12px;
+        font-size: 18px;
+    }
+    
+    /* Optimize input fields for mobile */
+    input[type="text"],
+    input[type="file"] {
+        font-size: 16px;
+        padding: 12px;
+        border-radius: 8px;
+    }
+    
+    /* Optimize notifications for mobile */
+    .notification {
+        margin: 8px;
+        padding: 12px;
+        border-radius: 8px;
+        font-size: 14px;
+    }
+}
+
+/* Portrait mode optimizations */
+.mobile-device.portrait .container {
+    padding-top: calc(16px + var(--safe-area-inset-top));
+}
+
+.mobile-device.portrait .file-transfer-section {
+    margin-top: 8px;
+}
+
+/* Landscape mode optimizations */
+.mobile-device.landscape .container {
+    padding-top: calc(8px + var(--safe-area-inset-top));
+}
+
+.mobile-device.landscape .file-transfer-section {
+    margin-top: 4px;
+}
+
+/* Pull-to-refresh indicator */
+.pull-to-refresh-indicator {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    background: linear-gradient(135deg, #2196F3, #1976D2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    transform: translateY(-100%);
+    transition: transform 0.3s ease;
+    z-index: 9998;
+}
+
+.pull-to-refresh-indicator.visible {
+    transform: translateY(0);
+}
+
+/* Mobile-specific animations */
+@keyframes slideInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Mobile gesture feedback */
+.mobile-device .gesture-feedback {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    z-index: 10001;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.mobile-device .gesture-feedback.visible {
+    opacity: 1;
+}
+
+/* Mobile file transfer progress */
+.mobile-device .transfer-progress {
+    position: fixed;
+    bottom: calc(20px + var(--safe-area-inset-bottom));
+    left: 20px;
+    right: 20px;
+    background: white;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    z-index: 9999;
+}
+
+.mobile-device .transfer-progress .progress-bar {
+    height: 6px;
+    border-radius: 3px;
+    background: #e0e0e0;
+    overflow: hidden;
+    margin: 8px 0;
+}
+
+.mobile-device .transfer-progress .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #2196F3, #1976D2);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+/* Mobile notification badges */
+.mobile-device .notification-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: #f44336;
+    color: white;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+}
+
+/* Mobile keyboard adjustments */
+@media (max-height: 500px) {
+    .mobile-device .container {
+        padding-top: 8px;
+        padding-bottom: 8px;
+    }
+    
+    .mobile-device .file-transfer-section {
+        margin-top: 4px;
+    }
+    
+    .mobile-device .pwa-install-container {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+    }
+}
+
+/* High DPI display optimizations */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+    .pwa-install-icon img {
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: crisp-edges;
+    }
+}
+
+/* Dark mode support for mobile */
+@media (prefers-color-scheme: dark) {
+    .mobile-device .transfer-progress {
+        background: #1e1e1e;
+        color: white;
+    }
+    
+    .mobile-device .gesture-feedback {
+        background: rgba(255, 255, 255, 0.9);
+        color: #1e1e1e;
+    }
+}
+
+/* Accessibility improvements for mobile */
+.mobile-device button:focus,
+.mobile-device .icon-button:focus {
+    outline: 2px solid #2196F3;
+    outline-offset: 2px;
+}
+
+.mobile-device .pwa-install-btn:focus {
+    outline: 2px solid white;
+    outline-offset: 2px;
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    .pwa-install-container,
+    .pwa-update-container,
+    .pull-to-refresh-indicator,
+    .gesture-feedback {
+        transition: none;
+    }
+    
+    .mobile-device button:active,
+    .mobile-device .icon-button:active {
+        transform: none;
+    }
+}

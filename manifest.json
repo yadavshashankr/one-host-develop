@@ -1,26 +1,126 @@
 {
-  "name": "One-Host",
+  "name": "One-Host - Secure P2P File Transfer",
   "short_name": "One-Host",
-  "description": "Secure P2P File Sharing via WebRTC.",
+  "description": "Share files instantly and securely between devices using peer-to-peer WebRTC technology. Support for large files up to 5GB.",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
-  "background_color": "#2196F3",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
   "theme_color": "#2196F3",
+  "categories": ["productivity", "utilities", "file-transfer"],
+  "lang": "en",
+  "dir": "ltr",
+  "prefer_related_applications": false,
   "icons": [
     {
-      "src": "assets/favicon/favicon-32x32.png",
-      "sizes": "32x32",
-      "type": "image/png"
+      "src": "assets/pwa-icons/icon-72x72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
-      "src": "assets/favicon/apple-touch-icon.png",
-      "sizes": "180x180",
-      "type": "image/png"
+      "src": "assets/pwa-icons/icon-96x96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any maskable"
     },
     {
-      "src": "assets/tablogo.png",
+      "src": "assets/pwa-icons/icon-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/pwa-icons/icon-144x144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/pwa-icons/icon-152x152.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/pwa-icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/pwa-icons/icon-384x384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/pwa-icons/icon-512x512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "assets/pwa-icons/icon-1024x1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "assets/og.png",
+      "sizes": "1200x630",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "One-Host File Transfer Interface"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Send File",
+      "short_name": "Send",
+      "description": "Quickly send a file to another device",
+      "url": "./?action=send",
+      "icons": [
+        {
+          "src": "assets/pwa-icons/icon-96x96.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Receive File",
+      "short_name": "Receive",
+      "description": "Quickly receive a file from another device",
+      "url": "./?action=receive",
+      "icons": [
+        {
+          "src": "assets/pwa-icons/icon-96x96.png",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/octet-stream": [".*"],
+        "image/*": [".jpg", ".jpeg", ".png", ".gif", ".webp"],
+        "video/*": [".mp4", ".avi", ".mov", ".mkv", ".webm"],
+        "audio/*": [".mp3", ".wav", ".flac", ".aac"],
+        "text/*": [".txt", ".md", ".json", ".xml", ".csv"],
+        "application/pdf": [".pdf"],
+        "application/zip": [".zip", ".rar", ".7z"]
+      }
+    }
+  ],
+  "protocol_handlers": [
+    {
+      "protocol": "web+onehost",
+      "url": "./?peer=%s"
     }
   ]
 } 

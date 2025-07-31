@@ -3409,3 +3409,530 @@ function initPeerIdEditing() {
 }
 
 init();
+
+// ===== PWA INSTALLATION AND MANAGEMENT =====
+
+// PWA state variables
+let deferredPrompt = null;
+let isPWAInstalled = false;
+let isPWAInstallable = false;
+
+// PWA Installation Detection and Management
+class PWAManager {
+    constructor() {
+        this.deferredPrompt = null;
+        this.isInstalled = false;
+        this.isInstallable = false;
+        this.installButton = null;
+        this.init();
+    }
+
+    init() {
+        this.checkInstallationStatus();
+        this.setupEventListeners();
+        this.createInstallButton();
+        this.setupServiceWorker();
+    }
+
+    // Check if PWA is already installed
+    checkInstallationStatus() {
+        // Check if running in standalone mode (installed PWA)
+        if (window.matchMedia('(display-mode: standalone)').matches || 
+            window.navigator.standalone === true) {
+            this.isInstalled = true;
+            console.log('PWA: Running in standalone mode (installed)');
+            this.hideInstallButton();
+            return;
+        }
+
+        // Check if PWA is installable
+        if ('serviceWorker' in navigator && 'PushManager' in window) {
+            this.isInstallable = true;
+            console.log('PWA: Installable detected');
+        }
+
+        // Check if already installed via other methods
+        if (localStorage.getItem('pwa-installed') === 'true') {
+            this.isInstalled = true;
+            console.log('PWA: Previously installed (localStorage)');
+            this.hideInstallButton();
+        }
+    }
+
+    // Setup event listeners for PWA installation
+    setupEventListeners() {
+        // Listen for beforeinstallprompt event
+        window.addEventListener('beforeinstallprompt', (e) => {
+            console.log('PWA: beforeinstallprompt event fired');
+            e.preventDefault();
+            this.deferredPrompt = e;
+            this.isInstallable = true;
+            this.showInstallButton();
+        });
+
+        // Listen for appinstalled event
+        window.addEventListener('appinstalled', (e) => {
+            console.log('PWA: App installed successfully');
+            this.isInstalled = true;
+            this.isInstallable = false;
+            this.deferredPrompt = null;
+            localStorage.setItem('pwa-installed', 'true');
+            this.hideInstallButton();
+            this.showInstallationSuccess();
+        });
+
+        // Listen for display mode changes
+        window.matchMedia('(display-mode: standalone)').addEventListener('change', (e) => {
+            if (e.matches) {
+                console.log('PWA: Switched to standalone mode');
+                this.isInstalled = true;
+                this.hideInstallButton();
+            }
+        });
+
+        // Listen for service worker messages
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.addEventListener('message', (event) => {
+                if (event.data && event.data.type === 'background-sync') {
+                    this.handleBackgroundSync(event.data);
+                }
+            });
+        }
+    }
+
+    // Create install button
+    createInstallButton() {
+        // Create install button container
+        const installContainer = document.createElement('div');
+        installContainer.id = 'pwa-install-container';
+        installContainer.className = 'pwa-install-container hidden';
+        installContainer.innerHTML = `
+            <div class="pwa-install-banner">
+                <div class="pwa-install-content">
+                    <div class="pwa-install-icon">
+                        <img src="assets/pwa-icons/icon-96x96.png" alt="One-Host" width="48" height="48">
+                    </div>
+                    <div class="pwa-install-text">
+                        <h3>Install One-Host</h3>
+                        <p>Get the best experience with our app. Support for large file transfers up to 5GB.</p>
+                    </div>
+                    <div class="pwa-install-actions">
+                        <button id="pwa-install-btn" class="pwa-install-btn primary">Install App</button>
+                        <button id="pwa-dismiss-btn" class="pwa-install-btn secondary">Not Now</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Add to page
+        document.body.appendChild(installContainer);
+
+        // Setup button event listeners
+        this.installButton = document.getElementById('pwa-install-btn');
+        const dismissButton = document.getElementById('pwa-dismiss-btn');
+
+        if (this.installButton) {
+            this.installButton.addEventListener('click', () => this.installPWA());
+        }
+
+        if (dismissButton) {
+            dismissButton.addEventListener('click', () => this.dismissInstallPrompt());
+        }
+    }
+
+    // Show install button
+    showInstallButton() {
+        if (!this.isInstalled && this.isInstallable && this.deferredPrompt) {
+            const container = document.getElementById('pwa-install-container');
+            if (container) {
+                container.classList.remove('hidden');
+                console.log('PWA: Showing install prompt');
+            }
+        }
+    }
+
+    // Hide install button
+    hideInstallButton() {
+        const container = document.getElementById('pwa-install-container');
+        if (container) {
+            container.classList.add('hidden');
+        }
+    }
+
+    // Install PWA
+    async installPWA() {
+        if (!this.deferredPrompt) {
+            console.log('PWA: No install prompt available');
+            return;
+        }
+
+        try {
+            console.log('PWA: Installing...');
+            this.deferredPrompt.prompt();
+            
+            const { outcome } = await this.deferredPrompt.userChoice;
+            console.log('PWA: Install outcome:', outcome);
+            
+            if (outcome === 'accepted') {
+                console.log('PWA: User accepted installation');
+                this.isInstalled = true;
+                this.hideInstallButton();
+                this.showInstallationSuccess();
+            } else {
+                console.log('PWA: User dismissed installation');
+                this.dismissInstallPrompt();
+            }
+            
+            this.deferredPrompt = null;
+        } catch (error) {
+            console.error('PWA: Installation failed:', error);
+            this.showInstallationError();
+        }
+    }
+
+    // Dismiss install prompt
+    dismissInstallPrompt() {
+        this.hideInstallButton();
+        // Don't show again for 24 hours
+        localStorage.setItem('pwa-install-dismissed', Date.now().toString());
+    }
+
+    // Show installation success
+    showInstallationSuccess() {
+        showNotification('One-Host installed successfully! You can now use it like a native app.', 'success');
+        
+        // Show platform-specific instructions
+        if (isMobileDevice()) {
+            if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
+                showNotification('Tip: Add to home screen for the best experience', 'info');
+            } else {
+                showNotification('Tip: App is now installed on your device', 'info');
+            }
+        }
+    }
+
+    // Show installation error
+    showInstallationError() {
+        showNotification('Installation failed. Please try again or use the browser version.', 'error');
+    }
+
+    // Setup service worker
+    async setupServiceWorker() {
+        if ('serviceWorker' in navigator) {
+            try {
+                const registration = await navigator.serviceWorker.register('./service-worker.js');
+                console.log('PWA: Service Worker registered:', registration);
+
+                // Check for updates
+                registration.addEventListener('updatefound', () => {
+                    console.log('PWA: Service Worker update found');
+                    this.showUpdateNotification();
+                });
+
+                // Handle service worker updates
+                navigator.serviceWorker.addEventListener('controllerchange', () => {
+                    console.log('PWA: Service Worker controller changed');
+                    window.location.reload();
+                });
+
+            } catch (error) {
+                console.error('PWA: Service Worker registration failed:', error);
+            }
+        }
+    }
+
+    // Show update notification
+    showUpdateNotification() {
+        const updateContainer = document.createElement('div');
+        updateContainer.id = 'pwa-update-container';
+        updateContainer.className = 'pwa-update-container';
+        updateContainer.innerHTML = `
+            <div class="pwa-update-banner">
+                <div class="pwa-update-content">
+                    <span>New version available</span>
+                    <button id="pwa-update-btn" class="pwa-update-btn">Update Now</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(updateContainer);
+
+        document.getElementById('pwa-update-btn').addEventListener('click', () => {
+            window.location.reload();
+        });
+    }
+
+    // Handle background sync
+    handleBackgroundSync(data) {
+        console.log('PWA: Background sync received:', data);
+        
+        if (data.action === 'file-transfer-sync') {
+            // Handle file transfer background sync
+            this.resumeInterruptedTransfers();
+        }
+    }
+
+    // Resume interrupted transfers
+    async resumeInterruptedTransfers() {
+        try {
+            // Check for interrupted transfers in IndexedDB
+            const db = await initIndexedDB();
+            if (db) {
+                const transaction = db.transaction(['fileChunks'], 'readonly');
+                const store = transaction.objectStore('fileChunks');
+                const request = store.getAll();
+                
+                request.onsuccess = function() {
+                    const chunks = request.result;
+                    if (chunks && chunks.length > 0) {
+                        console.log('PWA: Found interrupted transfers, attempting to resume');
+                        showNotification('Resuming interrupted file transfers...', 'info');
+                    }
+                };
+            }
+        } catch (error) {
+            console.error('PWA: Error resuming transfers:', error);
+        }
+    }
+
+    // Get PWA status
+    getStatus() {
+        return {
+            isInstalled: this.isInstalled,
+            isInstallable: this.isInstallable,
+            isStandalone: window.matchMedia('(display-mode: standalone)').matches,
+            hasServiceWorker: 'serviceWorker' in navigator
+        };
+    }
+}
+
+// Mobile-specific optimizations
+class MobileOptimizer {
+    constructor() {
+        this.isMobile = isMobileDevice();
+        this.init();
+    }
+
+    init() {
+        if (this.isMobile) {
+            this.optimizeForMobile();
+            this.setupMobileSpecificFeatures();
+        }
+    }
+
+    // Optimize for mobile devices
+    optimizeForMobile() {
+        // Adjust chunk size for mobile networks
+        if (window.CONFIG) {
+            window.CONFIG.CHUNK_SIZE = 64 * 1024; // 64KB for mobile
+        }
+
+        // Add mobile-specific CSS classes
+        document.body.classList.add('mobile-device');
+
+        // Optimize touch interactions
+        this.optimizeTouchInteractions();
+
+        // Setup mobile-specific event listeners
+        this.setupMobileEventListeners();
+    }
+
+    // Optimize touch interactions
+    optimizeTouchInteractions() {
+        // Add touch feedback to buttons
+        const buttons = document.querySelectorAll('button, .icon-button');
+        buttons.forEach(button => {
+            button.addEventListener('touchstart', () => {
+                button.style.transform = 'scale(0.95)';
+            });
+            
+            button.addEventListener('touchend', () => {
+                button.style.transform = 'scale(1)';
+            });
+        });
+    }
+
+    // Setup mobile-specific event listeners
+    setupMobileEventListeners() {
+        // Handle orientation changes
+        window.addEventListener('orientationchange', () => {
+            setTimeout(() => {
+                this.handleOrientationChange();
+            }, 100);
+        });
+
+        // Handle viewport changes
+        window.addEventListener('resize', () => {
+            this.handleViewportChange();
+        });
+    }
+
+    // Handle orientation change
+    handleOrientationChange() {
+        console.log('Mobile: Orientation changed');
+        // Adjust UI for new orientation
+        this.updateMobileLayout();
+    }
+
+    // Handle viewport change
+    handleViewportChange() {
+        console.log('Mobile: Viewport changed');
+        this.updateMobileLayout();
+    }
+
+    // Update mobile layout
+    updateMobileLayout() {
+        const isPortrait = window.innerHeight > window.innerWidth;
+        
+        if (isPortrait) {
+            document.body.classList.add('portrait');
+            document.body.classList.remove('landscape');
+        } else {
+            document.body.classList.add('landscape');
+            document.body.classList.remove('portrait');
+        }
+    }
+
+    // Setup mobile-specific features
+    setupMobileSpecificFeatures() {
+        // Add pull-to-refresh functionality
+        this.setupPullToRefresh();
+
+        // Add swipe gestures
+        this.setupSwipeGestures();
+
+        // Optimize file input for mobile
+        this.optimizeFileInput();
+    }
+
+    // Setup pull-to-refresh
+    setupPullToRefresh() {
+        let startY = 0;
+        let currentY = 0;
+        let pullDistance = 0;
+        const threshold = 100;
+
+        document.addEventListener('touchstart', (e) => {
+            if (window.scrollY === 0) {
+                startY = e.touches[0].clientY;
+            }
+        });
+
+        document.addEventListener('touchmove', (e) => {
+            if (window.scrollY === 0 && startY > 0) {
+                currentY = e.touches[0].clientY;
+                pullDistance = currentY - startY;
+                
+                if (pullDistance > 0) {
+                    e.preventDefault();
+                    this.showPullToRefreshIndicator(pullDistance);
+                }
+            }
+        });
+
+        document.addEventListener('touchend', () => {
+            if (pullDistance > threshold) {
+                this.handlePullToRefresh();
+            }
+            this.hidePullToRefreshIndicator();
+            startY = 0;
+            pullDistance = 0;
+        });
+    }
+
+    // Show pull-to-refresh indicator
+    showPullToRefreshIndicator(distance) {
+        // Implementation for pull-to-refresh visual feedback
+    }
+
+    // Hide pull-to-refresh indicator
+    hidePullToRefreshIndicator() {
+        // Implementation to hide pull-to-refresh visual feedback
+    }
+
+    // Handle pull-to-refresh
+    handlePullToRefresh() {
+        console.log('Mobile: Pull-to-refresh triggered');
+        // Refresh the page or reload data
+        window.location.reload();
+    }
+
+    // Setup swipe gestures
+    setupSwipeGestures() {
+        let startX = 0;
+        let startY = 0;
+        let endX = 0;
+        let endY = 0;
+
+        document.addEventListener('touchstart', (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+        });
+
+        document.addEventListener('touchend', (e) => {
+            endX = e.changedTouches[0].clientX;
+            endY = e.changedTouches[0].clientY;
+            
+            const deltaX = endX - startX;
+            const deltaY = endY - startY;
+            
+            if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
+                if (deltaX > 0) {
+                    this.handleSwipeRight();
+                } else {
+                    this.handleSwipeLeft();
+                }
+            }
+        });
+    }
+
+    // Handle swipe right
+    handleSwipeRight() {
+        console.log('Mobile: Swipe right detected');
+        // Could be used for navigation or other actions
+    }
+
+    // Handle swipe left
+    handleSwipeLeft() {
+        console.log('Mobile: Swipe left detected');
+        // Could be used for navigation or other actions
+    }
+
+    // Optimize file input for mobile
+    optimizeFileInput() {
+        const fileInput = document.getElementById('file-input');
+        if (fileInput) {
+            // Add mobile-specific attributes
+            fileInput.setAttribute('capture', 'environment');
+            fileInput.setAttribute('accept', 'image/*,video/*,audio/*,application/*');
+        }
+    }
+}
+
+// Initialize PWA and Mobile optimizations
+let pwaManager = null;
+let mobileOptimizer = null;
+
+// Initialize PWA after DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize PWA manager
+    pwaManager = new PWAManager();
+    
+    // Initialize mobile optimizer
+    mobileOptimizer = new MobileOptimizer();
+    
+    // Check if install prompt was recently dismissed
+    const dismissedTime = localStorage.getItem('pwa-install-dismissed');
+    if (dismissedTime) {
+        const hoursSinceDismissed = (Date.now() - parseInt(dismissedTime)) / (1000 * 60 * 60);
+        if (hoursSinceDismissed < 24) {
+            console.log('PWA: Install prompt recently dismissed, not showing');
+        } else {
+            localStorage.removeItem('pwa-install-dismissed');
+        }
+    }
+});
+
+// Export PWA manager for global access
+window.PWAManager = pwaManager;
+window.MobileOptimizer = mobileOptimizer;
