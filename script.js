@@ -3202,27 +3202,21 @@ async function downloadLargeFileWithIndexedDB(blob, fileName) {
 // Function to share file on mobile devices
 async function shareFileOnMobile(blob, fileName) {
     try {
-        // Check if Web Share API is supported
         if (navigator.share && navigator.canShare) {
             const file = new File([blob], fileName, {
                 type: blob.type || 'application/octet-stream'
             });
-            
             const shareData = {
                 title: 'One-Host File',
                 text: `File: ${fileName}`,
                 files: [file]
             };
-            
-            // Check if we can share files
             if (navigator.canShare(shareData)) {
                 await navigator.share(shareData);
                 showNotification('File shared successfully!', 'success');
                 return true;
             }
         }
-        
-        // Fallback to download if sharing is not supported
         return false;
     } catch (error) {
         console.error('Error sharing file:', error);
@@ -3243,24 +3237,18 @@ function downloadBlob(blob, fileName, fileId) {
 
 // Enhanced mobile download function with multiple fallbacks
 async function downloadLargeFileMobile(blob, fileName) {
-    // For large files (>10MB), try File System Access API first
-    if (blob.size > 10 * 1024 * 1024) {
-        // Try File System Access API (best option for large files)
-        if (await downloadLargeFileWithFileSystemAPI(blob, fileName)) {
-            return true;
-        }
-        
-        // Try IndexedDB for large files
-        if (await downloadLargeFileWithIndexedDB(blob, fileName)) {
-            return true;
-        }
-    }
-    
-    // For smaller files or if large file methods fail, try Web Share API
+    // PRIORITY 1: Web Share API (lowest memory usage, best UX)
     if (await shareFileOnMobile(blob, fileName)) {
         return true;
     }
-    
+    // PRIORITY 2: File System Access API (native file picker)
+    if (await downloadLargeFileWithFileSystemAPI(blob, fileName)) {
+        return true;
+    }
+    // PRIORITY 3: Direct Download (simple, reliable, memory-safe)
+    if (await downloadLargeFileWithDirectDownload(blob, fileName)) {
+        return true;
+    }
     // Final fallback: show error
     showNotification('Unable to save file. Please try on desktop or use a different browser.', 'error');
     return false;
@@ -4219,3 +4207,23 @@ document.addEventListener('DOMContentLoaded', () => {
 // Export PWA manager for global access
 window.PWAManager = pwaManager;
 window.MobileOptimizer = mobileOptimizer;
+
+// Function to download large file using direct download (memory-safe fallback)
+async function downloadLargeFileWithDirectDownload(blob, fileName) {
+    try {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+        showNotification('File download started!', 'success');
+        return true;
+    } catch (error) {
+        console.error('Direct download error:', error);
+        return false;
+    }
+}
