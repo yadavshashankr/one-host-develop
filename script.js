@@ -310,6 +310,11 @@ async function storeFileChunk(fileId, chunkData, chunkIndex) {
 
 // ✅ NEW: Get all chunks for a file
 async function getFileChunks(fileId) {
+    console.log(`=== GET FILE CHUNKS START ===`);
+    console.log(`Requesting chunks for: ${fileId}`);
+    console.log(`Global fileChunks keys:`, Object.keys(fileChunks));
+    console.log(`Global fileChunks size:`, Object.keys(fileChunks).length);
+    
     try {
         // Try local fileChunks first (most reliable)
         const localChunks = getLocalFileChunks(fileId);
@@ -375,7 +380,32 @@ async function getFileChunks(fileId) {
             return sortedChunks;
         }
         
-        console.log(`No chunks found for ${fileId}`);
+        console.log(`No chunks found for ${fileId} - running debug`);
+        
+        // Debug: Check what's in fileChunks
+        if (fileChunks[fileId]) {
+            console.log(`File data exists for ${fileId}:`, {
+                fileName: fileChunks[fileId].fileName,
+                fileSize: fileChunks[fileId].fileSize,
+                receivedSize: fileChunks[fileId].receivedSize,
+                chunksLength: fileChunks[fileId].chunks?.length || 0,
+                receivedChunksCount: fileChunks[fileId].receivedChunks?.size || 0
+            });
+        }
+        
+        // Try to restore from sessionStorage backup
+        console.log(`Attempting to restore chunks from sessionStorage for ${fileId}`);
+        const restored = restoreFileChunks(fileId);
+        if (restored) {
+            console.log(`Restored chunks from backup for ${fileId}, retrying retrieval`);
+            // Retry getting chunks after restoration
+            const localChunks = getLocalFileChunks(fileId);
+            if (localChunks.length > 0) {
+                console.log(`Successfully retrieved ${localChunks.length} chunks after restoration for ${fileId}`);
+                return localChunks;
+            }
+        }
+        
         return [];
         
     } catch (error) {
@@ -674,19 +704,69 @@ function listAllAvailableFiles() {
 // ✅ NEW: Restore file chunks from backup if needed
 function restoreFileChunks(fileId) {
     try {
-        const backupKey = `fileChunks_backup_${fileId}`;
-        const backupData = sessionStorage.getItem(backupKey);
-        if (backupData) {
-            const backup = JSON.parse(backupData);
-            console.log(`Found backup for ${fileId}:`, backup);
+        // Check for individual chunk backups first
+        const chunkBackupKeys = [];
+        for (let i = 0; i < sessionStorage.length; i++) {
+            const key = sessionStorage.key(i);
+            if (key && key.startsWith(`chunk_backup_${fileId}_`)) {
+                chunkBackupKeys.push(key);
+            }
+        }
+        
+        if (chunkBackupKeys.length > 0) {
+            console.log(`Found ${chunkBackupKeys.length} chunk backups for ${fileId}`);
             
             // Check if current chunks are missing or incomplete
             const currentData = fileChunks[fileId];
             if (!currentData || !currentData.chunks || currentData.chunks.length === 0) {
-                console.log(`Restoring file chunks from backup for ${fileId}`);
-                // The actual chunks would need to be restored from IndexedDB
+                console.log(`Current chunks missing for ${fileId}, attempting restoration from IndexedDB`);
+                
+                // Try to restore from IndexedDB
+                if (isIndexedDBSupported()) {
+                    initIndexedDB().then(db => {
+                        if (db) {
+                            const transaction = db.transaction(['fileChunks'], 'readonly');
+                            const store = transaction.objectStore('fileChunks');
+                            const request = store.getAll(IDBKeyRange.only(fileId));
+                            
+                            request.onsuccess = function() {
+                                const chunks = request.result;
+                                if (chunks && chunks.length > 0) {
+                                    console.log(`Restored ${chunks.length} chunks from IndexedDB for ${fileId}`);
+                                    
+                                    // Reconstruct fileData
+                                    if (!fileChunks[fileId]) {
+                                        fileChunks[fileId] = {
+                                            chunks: [],
+                                            receivedChunks: new Set()
+                                        };
+                                    }
+                                    
+                                    // Sort chunks by index and restore
+                                    chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+                                    chunks.forEach(chunk => {
+                                        fileChunks[fileId].chunks[chunk.chunkIndex] = chunk.chunkData;
+                                        fileChunks[fileId].receivedChunks.add(chunk.chunkIndex);
+                                    });
+                                    
+                                    console.log(`Successfully restored file data for ${fileId}`);
+                                }
+                            };
+                        }
+                    });
+                }
+                
                 return true;
             }
+        }
+        
+        // Check for file-level backup
+        const backupKey = `fileChunks_backup_${fileId}`;
+        const backupData = sessionStorage.getItem(backupKey);
+        if (backupData) {
+            const backup = JSON.parse(backupData);
+            console.log(`Found file backup for ${fileId}:`, backup);
+            return true;
         }
     } catch (error) {
         console.error('Error restoring file chunks:', error);
@@ -1815,6 +1895,11 @@ async function handleFileChunk(data) {
             console.warn('Could not backup chunk to sessionStorage:', error);
         }
         
+        // Periodically preserve entire file data (every 10 chunks)
+        if (fileData.receivedChunks.size % 10 === 0) {
+            preserveFileChunks(data.fileId);
+        }
+        
         // Update progress
         const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
         if (!fileData.lastProgressUpdate || currentProgress - fileData.lastProgressUpdate >= 1) {
@@ -1931,6 +2016,14 @@ async function handleFileComplete(data) {
                         downloadButton.title = 'Download completed';
                         showNotification(`${fileData.fileName} downloaded successfully`, 'success');
                         
+                        // Clean up file chunks after successful download
+                        try {
+                            await cleanupFileChunks(data.fileId);
+                            console.log(`Cleaned up chunks for ${data.fileId} after successful download`);
+                        } catch (cleanupError) {
+                            console.warn('Error cleaning up chunks after download:', cleanupError);
+                        }
+                        
                     } catch (error) {
                         console.error('Download failed:', error);
                         // Update UI for failed download
@@ -1964,18 +2057,40 @@ async function handleFileComplete(data) {
             }
         }
 
-        // Clean up chunks
-        await cleanupFileChunks(data.fileId);
+        // Don't clean up chunks yet - keep them for download
+        // Chunks will be cleaned up after successful download
+        
+        // Preserve file chunks to prevent loss
+        preserveFileChunks(data.fileId);
 
     } catch (error) {
         console.error('Error handling file completion:', error);
         showNotification('Error processing file: ' + error.message, 'error');
-    } finally {
+        
+        // Only delete file data on error, not on success
         delete fileChunks[data.fileId];
         elements.transferProgress.classList.add('hidden');
         updateProgress(0);
         updateTransferInfo('');
     }
+    
+    // Don't delete file data on success - keep it for download
+    // The data will be cleaned up after successful download or timeout
+    elements.transferProgress.classList.add('hidden');
+    updateProgress(0);
+    updateTransferInfo('');
+    
+    // Set a timeout to clean up chunks if not downloaded within 30 minutes
+    setTimeout(async () => {
+        if (fileChunks[data.fileId]) {
+            console.log(`Cleaning up chunks for ${data.fileId} due to timeout`);
+            try {
+                await cleanupFileChunks(data.fileId);
+            } catch (error) {
+                console.warn('Error cleaning up chunks on timeout:', error);
+            }
+        }
+    }, 30 * 60 * 1000); // 30 minutes
 }
 
 // Forward file info to other connected peers
