@@ -2932,8 +2932,16 @@ function updateFilesList(listElement, fileInfo, type) {
     
     const downloadBtn = document.createElement('button');
     downloadBtn.className = 'icon-button';
-    downloadBtn.title = 'Download file';
-    downloadBtn.innerHTML = '<span class="material-icons">download</span>';
+    
+    // Use share icon on mobile devices, download icon on desktop
+    if (isMobileDevice()) {
+        downloadBtn.title = 'Share file';
+        downloadBtn.innerHTML = '<span class="material-icons">share</span>';
+    } else {
+        downloadBtn.title = 'Download file';
+        downloadBtn.innerHTML = '<span class="material-icons">download</span>';
+    }
+    
     downloadBtn.onclick = async () => {
         try {
             if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
@@ -3125,8 +3133,55 @@ function reconnectToPeer(peerId) {
     }
 }
 
+// Function to share file on mobile devices
+async function shareFileOnMobile(blob, fileName) {
+    try {
+        // Check if Web Share API is supported
+        if (navigator.share && navigator.canShare) {
+            const file = new File([blob], fileName, {
+                type: blob.type || 'application/octet-stream'
+            });
+            
+            const shareData = {
+                title: 'One-Host File',
+                text: `File: ${fileName}`,
+                files: [file]
+            };
+            
+            // Check if we can share files
+            if (navigator.canShare(shareData)) {
+                await navigator.share(shareData);
+                showNotification('File shared successfully!', 'success');
+                return true;
+            }
+        }
+        
+        // Fallback to download if sharing is not supported
+        return false;
+    } catch (error) {
+        console.error('Error sharing file:', error);
+        return false;
+    }
+}
+
 // Function to download a blob
 function downloadBlob(blob, fileName, fileId) {
+    // On mobile devices, try to share the file first
+    if (isMobileDevice()) {
+        shareFileOnMobile(blob, fileName).then(shared => {
+            if (!shared) {
+                // Fallback to regular download if sharing failed
+                performRegularDownload(blob, fileName, fileId);
+            }
+        });
+    } else {
+        // On desktop, use regular download
+        performRegularDownload(blob, fileName, fileId);
+    }
+}
+
+// Function to perform regular download (desktop or fallback)
+function performRegularDownload(blob, fileName, fileId) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
