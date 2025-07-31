@@ -3563,10 +3563,7 @@ class PWAManager {
 
     // Handle indicator click
     handleIndicatorClick() {
-        if (this.isInstalled && this.updateAvailable) {
-            // Update the app if update is available
-            window.location.reload();
-        } else if (this.isInstallable && this.deferredPrompt) {
+        if (this.isInstallable && this.deferredPrompt) {
             // Show install banner
             this.showInstallButton();
         }
@@ -3577,15 +3574,11 @@ class PWAManager {
         if (!this.indicator) return;
 
         if (this.isInstalled) {
-            // Only show update indicator if update is available
-            if (this.updateAvailable) {
-                this.indicator.classList.remove('hidden');
-                this.indicator.classList.add('update-available');
-                this.indicator.querySelector('.material-icons').textContent = 'system_update';
-                this.indicator.title = 'Update available - Click to update';
-            } else {
-                this.indicator.classList.add('hidden');
-            }
+            // Show indicator even after installation (for re-installation)
+            this.indicator.classList.remove('hidden');
+            this.indicator.classList.remove('update-available');
+            this.indicator.querySelector('.material-icons').textContent = 'get_app';
+            this.indicator.title = 'Install One-Host App';
         } else if (this.isInstallable && this.deferredPrompt) {
             // Show install indicator if installable
             this.indicator.classList.remove('hidden');
@@ -3600,7 +3593,7 @@ class PWAManager {
 
     // Show install button
     showInstallButton() {
-        if (!this.isInstalled && this.isInstallable && this.deferredPrompt) {
+        if (this.isInstallable && this.deferredPrompt) {
             const container = document.getElementById('pwa-install-container');
             if (container) {
                 container.classList.remove('hidden');
@@ -3660,15 +3653,6 @@ class PWAManager {
         if (!this.notificationShown) {
             showNotification('One-Host installed successfully! You can now use it like a native app.', 'success');
             this.notificationShown = true;
-            
-            // Show platform-specific instructions
-            if (isMobileDevice()) {
-                if (navigator.userAgent.includes('iPhone') || navigator.userAgent.includes('iPad')) {
-                    showNotification('Tip: Add to home screen for the best experience', 'info');
-                } else {
-                    showNotification('Tip: App is now installed on your device', 'info');
-                }
-            }
         }
     }
 
