@@ -1117,7 +1117,7 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
         await writable.close();
         
         console.log('File downloaded with File System API');
-        showNotification(`${fileName} downloaded successfully`, 'success');
+        showFileDownloadNotification(fileName, 'downloaded', 'success');
         
         return true;
         
@@ -1297,7 +1297,7 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
         
         console.log('File downloaded with native chunked blob');
         console.log(`File integrity: size=${finalBlob.size}, type=${finalBlob.type}, chunks=${chunks.length}`);
-        showNotification(`${fileName} downloaded successfully`, 'success');
+        showFileDownloadNotification(fileName, 'downloaded', 'success');
         
         return true;
         
@@ -1349,7 +1349,7 @@ async function downloadWithDataURL(fileId, fileName, fileType, fileSize) {
         document.body.removeChild(a);
         
         console.log('File downloaded with data URL');
-        showNotification(`${fileName} downloaded successfully`, 'success');
+        showFileDownloadNotification(fileName, 'downloaded', 'success');
         
         return true;
         
@@ -2068,7 +2068,7 @@ async function handleFileComplete(data) {
                         listItem.classList.add('download-completed');
                         downloadButton.innerHTML = '<span class="material-icons">check</span>';
                         downloadButton.title = 'Download completed';
-                        showNotification(`${fileData.fileName} downloaded successfully`, 'success');
+                        showFileDownloadNotification(fileData.fileName, 'downloaded', 'success');
                         
                         // Clean up file chunks after successful download
                         try {
@@ -2682,7 +2682,34 @@ function formatFileSize(bytes) {
     return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
+// Notification deduplication tracking
+const notificationHistory = new Map();
+const NOTIFICATION_DEDUP_WINDOW = 3000; // 3 seconds
+
 function showNotification(message, type = 'info') {
+    // Create a unique key for deduplication based on message content and type
+    const notificationKey = `${message}_${type}`;
+    const now = Date.now();
+    
+    // Check if we've shown this notification recently
+    if (notificationHistory.has(notificationKey)) {
+        const lastShown = notificationHistory.get(notificationKey);
+        if (now - lastShown < NOTIFICATION_DEDUP_WINDOW) {
+            console.log(`Skipping duplicate notification: ${message}`);
+            return; // Skip duplicate notification
+        }
+    }
+    
+    // Update notification history
+    notificationHistory.set(notificationKey, now);
+    
+    // Clean up old entries (older than 10 seconds)
+    for (const [key, timestamp] of notificationHistory.entries()) {
+        if (now - timestamp > 10000) {
+            notificationHistory.delete(key);
+        }
+    }
+    
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
     notification.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
@@ -3213,7 +3240,7 @@ async function shareFileOnMobile(blob, fileName) {
             };
             if (navigator.canShare(shareData)) {
                 await navigator.share(shareData);
-                showNotification('File shared successfully!', 'success');
+                showFileDownloadNotification(fileName, 'shared', 'success');
                 return true;
             }
         }
@@ -4220,10 +4247,46 @@ async function downloadLargeFileWithDirectDownload(blob, fileName) {
         a.click();
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 100);
-        showNotification('File download started!', 'success');
+        showFileDownloadNotification(fileName, 'download started', 'success');
         return true;
     } catch (error) {
         console.error('Direct download error:', error);
         return false;
     }
+}
+
+// Specialized function for file download notifications with better deduplication
+function showFileDownloadNotification(fileName, action = 'downloaded', type = 'success') {
+    const message = `${fileName} ${action} successfully`;
+    const notificationKey = `file_${fileName}_${action}`;
+    const now = Date.now();
+    
+    // Check if we've shown this file download notification recently
+    if (notificationHistory.has(notificationKey)) {
+        const lastShown = notificationHistory.get(notificationKey);
+        if (now - lastShown < NOTIFICATION_DEDUP_WINDOW) {
+            console.log(`Skipping duplicate file notification: ${message}`);
+            return; // Skip duplicate notification
+        }
+    }
+    
+    // Update notification history
+    notificationHistory.set(notificationKey, now);
+    
+    // Clean up old entries (older than 10 seconds)
+    for (const [key, timestamp] of notificationHistory.entries()) {
+        if (now - timestamp > 10000) {
+            notificationHistory.delete(key);
+        }
+    }
+    
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message.charAt(0).toUpperCase() + message.slice(1);
+    
+    elements.notifications.appendChild(notification);
+    
+    setTimeout(() => {
+        notification.remove();
+    }, 5000);
 }
