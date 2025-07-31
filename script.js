@@ -3574,13 +3574,10 @@ class PWAManager {
         if (!this.indicator) return;
 
         if (this.isInstalled) {
-            // Show indicator even after installation (for re-installation)
-            this.indicator.classList.remove('hidden');
-            this.indicator.classList.remove('update-available');
-            this.indicator.querySelector('.material-icons').textContent = 'get_app';
-            this.indicator.title = 'Install One-Host App';
+            // Hide indicator when PWA is already installed
+            this.indicator.classList.add('hidden');
         } else if (this.isInstallable && this.deferredPrompt) {
-            // Show install indicator if installable
+            // Show install indicator only on webpage (not in PWA)
             this.indicator.classList.remove('hidden');
             this.indicator.classList.remove('update-available');
             this.indicator.querySelector('.material-icons').textContent = 'get_app';
