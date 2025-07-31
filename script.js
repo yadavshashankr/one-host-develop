@@ -47,6 +47,17 @@ let db = null;
 let transferInProgress = false;
 let isConnectionReady = false;
 let fileChunks = {}; // Initialize fileChunks object
+
+// Track if page has been refreshed to help with debugging
+let pageLoadTime = Date.now();
+let isPageRefreshed = false;
+
+// Check if this is a page refresh
+if (performance.navigation.type === 1) {
+    isPageRefreshed = true;
+    console.log('Page was refreshed, chunks may have been lost');
+}
+
 let keepAliveInterval = null;
 let connectionTimeouts = new Map();
 let isPageVisible = true;
@@ -315,6 +326,23 @@ async function getFileChunks(fileId) {
     console.log(`Global fileChunks keys:`, Object.keys(fileChunks));
     console.log(`Global fileChunks size:`, Object.keys(fileChunks).length);
     
+    // Enhanced debugging to understand why chunks are missing
+    if (fileChunks[fileId]) {
+        console.log(`File data exists for ${fileId}:`, {
+            fileName: fileChunks[fileId].fileName,
+            fileSize: fileChunks[fileId].fileSize,
+            receivedSize: fileChunks[fileId].receivedSize,
+            chunksLength: fileChunks[fileId].chunks?.length || 0,
+            receivedChunksCount: fileChunks[fileId].receivedChunks?.size || 0,
+            chunksArray: fileChunks[fileId].chunks ? fileChunks[fileId].chunks.filter(c => c !== undefined).length : 0
+        });
+    } else {
+        console.warn(`No file data found for ${fileId} in global fileChunks`);
+        if (isPageRefreshed) {
+            console.warn(`Page was refreshed - attempting to restore chunks from persistent storage`);
+        }
+    }
+    
     try {
         // Try local fileChunks first (most reliable)
         const localChunks = getLocalFileChunks(fileId);
@@ -451,7 +479,24 @@ function getLocalFileChunks(fileId) {
             fileDataKeys: fileData ? Object.keys(fileData) : 'no fileData',
             chunksLength: fileData?.chunks?.length || 'no chunks array'
         });
-        return [];
+        
+        // Try to restore from sessionStorage backup
+        console.log(`Attempting to restore chunks from sessionStorage for ${fileId}`);
+        const restored = restoreFileChunks(fileId);
+        if (restored) {
+            console.log(`Restored chunks from backup for ${fileId}, retrying retrieval`);
+            // Retry getting chunks after restoration
+            const retryFileData = fileChunks[fileId];
+            if (retryFileData && retryFileData.chunks) {
+                console.log(`Successfully restored file data for ${fileId}`);
+                // Continue with the restored data
+            } else {
+                console.warn(`Restoration failed for ${fileId}`);
+                return [];
+            }
+        } else {
+            return [];
+        }
     }
     
     console.log(`Local fileData for ${fileId}:`, {
@@ -1044,7 +1089,8 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
                 throw new Error(`Chunk order corrupted in File System API: expected ${i}, got ${chunk.chunkIndex}`);
             }
             
-            const arrayBuffer = await chunk.chunkData.arrayBuffer();
+            // Convert Uint8Array to ArrayBuffer for writing
+            const arrayBuffer = chunk.chunkData.buffer || chunk.chunkData;
             await writable.write(arrayBuffer);
             
             downloadedSize += arrayBuffer.byteLength;
@@ -1191,8 +1237,8 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
                 throw new Error(`Chunk order corrupted: expected ${i}, got ${chunk.chunkIndex}`);
             }
             
-            // Convert chunk to array buffer
-            const arrayBuffer = await chunk.chunkData.arrayBuffer();
+            // Convert Uint8Array to ArrayBuffer
+            const arrayBuffer = chunk.chunkData.buffer || chunk.chunkData;
             chunkBuffers.push(arrayBuffer);
             totalChunkSize += arrayBuffer.byteLength;
             
@@ -1270,7 +1316,8 @@ async function downloadWithDataURL(fileId, fileName, fileType, fileSize) {
         
         for (let i = 0; i < chunks.length; i++) {
             const chunk = chunks[i];
-            const arrayBuffer = await chunk.chunkData.arrayBuffer();
+            // Convert Uint8Array to ArrayBuffer
+            const arrayBuffer = chunk.chunkData.buffer || chunk.chunkData;
             const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
             base64Chunks.push(base64);
             
