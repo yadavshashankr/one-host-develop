@@ -3424,6 +3424,8 @@ class PWAManager {
         this.isInstalled = false;
         this.isInstallable = false;
         this.installButton = null;
+        this.updateAvailable = false;
+        this.lastUpdateCheck = null;
         this.init();
     }
 
@@ -3556,24 +3558,12 @@ class PWAManager {
 
     // Handle indicator click
     handleIndicatorClick() {
-        if (this.isInstalled) {
-            // Check for updates if installed
-            this.checkForUpdates();
+        if (this.isInstalled && this.updateAvailable) {
+            // Update the app if update is available
+            window.location.reload();
         } else if (this.isInstallable && this.deferredPrompt) {
             // Show install banner
             this.showInstallButton();
-        }
-    }
-
-    // Check for PWA updates
-    checkForUpdates() {
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistration().then(registration => {
-                if (registration) {
-                    registration.update();
-                    showNotification('Checking for updates...', 'info');
-                }
-            });
         }
     }
 
@@ -3582,16 +3572,20 @@ class PWAManager {
         if (!this.indicator) return;
 
         if (this.isInstalled) {
-            // Show update indicator if installed
-            this.indicator.classList.remove('hidden');
-            this.indicator.classList.add('update-available');
-            this.indicator.querySelector('.material-icons').textContent = 'update';
-            this.indicator.title = 'Check for One-Host updates';
+            // Only show update indicator if update is available
+            if (this.updateAvailable) {
+                this.indicator.classList.remove('hidden');
+                this.indicator.classList.add('update-available');
+                this.indicator.querySelector('.material-icons').textContent = 'system_update';
+                this.indicator.title = 'Update available - Click to update';
+            } else {
+                this.indicator.classList.add('hidden');
+            }
         } else if (this.isInstallable && this.deferredPrompt) {
             // Show install indicator if installable
             this.indicator.classList.remove('hidden');
             this.indicator.classList.remove('update-available');
-            this.indicator.querySelector('.material-icons').textContent = 'download';
+            this.indicator.querySelector('.material-icons').textContent = 'get_app';
             this.indicator.title = 'Install One-Host App';
         } else {
             // Hide indicator if not applicable
@@ -3682,15 +3676,24 @@ class PWAManager {
                 const registration = await navigator.serviceWorker.register('./service-worker.js');
                 console.log('PWA: Service Worker registered:', registration);
 
+                // Check for updates on app start
+                this.checkForUpdatesOnStart();
+
+                // Check for updates every 24 hours
+                this.setupPeriodicUpdateCheck();
+
                 // Check for updates
                 registration.addEventListener('updatefound', () => {
                     console.log('PWA: Service Worker update found');
-                    this.showUpdateNotification();
+                    this.updateAvailable = true;
+                    this.updateIndicatorVisibility();
                 });
 
                 // Handle service worker updates
                 navigator.serviceWorker.addEventListener('controllerchange', () => {
                     console.log('PWA: Service Worker controller changed');
+                    this.updateAvailable = false;
+                    this.updateIndicatorVisibility();
                     window.location.reload();
                 });
 
@@ -3700,25 +3703,38 @@ class PWAManager {
         }
     }
 
+    // Check for updates on app start
+    checkForUpdatesOnStart() {
+        if (this.isInstalled) {
+            this.performUpdateCheck();
+        }
+    }
+
+    // Setup periodic update check (24 hours)
+    setupPeriodicUpdateCheck() {
+        setInterval(() => {
+            if (this.isInstalled) {
+                this.performUpdateCheck();
+            }
+        }, 24 * 60 * 60 * 1000); // 24 hours
+    }
+
+    // Perform update check
+    performUpdateCheck() {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistration().then(registration => {
+                if (registration) {
+                    registration.update();
+                    this.lastUpdateCheck = Date.now();
+                }
+            });
+        }
+    }
+
     // Show update notification
     showUpdateNotification() {
-        const updateContainer = document.createElement('div');
-        updateContainer.id = 'pwa-update-container';
-        updateContainer.className = 'pwa-update-container';
-        updateContainer.innerHTML = `
-            <div class="pwa-update-banner">
-                <div class="pwa-update-content">
-                    <span>New version available</span>
-                    <button id="pwa-update-btn" class="pwa-update-btn">Update Now</button>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(updateContainer);
-
-        document.getElementById('pwa-update-btn').addEventListener('click', () => {
-            window.location.reload();
-        });
+        // Only show indicator, not the green notification
+        this.updateIndicatorVisibility();
     }
 
     // Handle background sync
