@@ -1776,18 +1776,44 @@ async function handleFileChunk(data) {
         if (!fileData.chunks) {
             fileData.chunks = [];
         }
+        
+        // Ensure array is large enough for this chunk index
+        while (fileData.chunks.length <= chunkIndex) {
+            fileData.chunks.push(undefined);
+        }
+        
         fileData.chunks[chunkIndex] = data.data;
         
         // Update received size IMMEDIATELY
         const previousSize = fileData.receivedSize || 0;
         fileData.receivedSize = previousSize + data.data.byteLength;
         
+        // Track chunk reception for debugging
+        if (!fileData.receivedChunks) {
+            fileData.receivedChunks = new Set();
+        }
+        fileData.receivedChunks.add(chunkIndex);
+        
         console.log(`Chunk ${chunkIndex} stored IMMEDIATELY, received: ${fileData.receivedSize}/${fileData.fileSize} (added ${data.data.byteLength})`);
+        console.log(`Total chunks received so far: ${fileData.receivedChunks.size}`);
         
         // Store chunk in IndexedDB for streaming download (async, but don't wait)
         storeFileChunk(data.fileId, data.data, chunkIndex).catch(error => {
             console.error('Error storing chunk in IndexedDB:', error);
         });
+        
+        // Preserve chunks in sessionStorage as backup
+        try {
+            const chunkBackup = {
+                fileId: data.fileId,
+                chunkIndex: chunkIndex,
+                chunkSize: data.data.byteLength,
+                timestamp: Date.now()
+            };
+            sessionStorage.setItem(`chunk_backup_${data.fileId}_${chunkIndex}`, JSON.stringify(chunkBackup));
+        } catch (error) {
+            console.warn('Could not backup chunk to sessionStorage:', error);
+        }
         
         // Update progress
         const currentProgress = (fileData.receivedSize / fileData.fileSize) * 100;
@@ -1801,6 +1827,7 @@ async function handleFileChunk(data) {
             receivedSize: fileData.receivedSize,
             fileSize: fileData.fileSize,
             chunksLength: fileData.chunks.length,
+            receivedChunksCount: fileData.receivedChunks.size,
             chunkData: fileData.chunks[chunkIndex] ? 'present' : 'missing'
         });
         
@@ -1834,13 +1861,35 @@ async function handleFileComplete(data) {
             fileSize: fileData.fileSize,
             receivedSize: fileData.receivedSize,
             chunksLength: fileData.chunks ? fileData.chunks.length : 0,
-            chunksArray: fileData.chunks ? fileData.chunks.filter(c => c !== undefined).length : 0
+            chunksArray: fileData.chunks ? fileData.chunks.filter(c => c !== undefined).length : 0,
+            receivedChunksCount: fileData.receivedChunks ? fileData.receivedChunks.size : 0,
+            expectedChunks: Math.ceil(fileData.fileSize / (256 * 1024))
         });
         
         // Use the tracked received size instead of recalculating from chunks
         const tolerance = Math.max(1024, fileData.fileSize * 0.01);
         if (Math.abs(fileData.receivedSize - fileData.fileSize) > tolerance) {
             throw new Error(`Size mismatch: expected ${fileData.fileSize}, got ${fileData.receivedSize}`);
+        }
+        
+        // Validate chunk completeness
+        const expectedChunks = Math.ceil(fileData.fileSize / (256 * 1024));
+        const receivedChunks = fileData.receivedChunks ? fileData.receivedChunks.size : 0;
+        
+        console.log(`Chunk validation: expected ${expectedChunks} chunks, received ${receivedChunks} chunks`);
+        
+        if (receivedChunks < expectedChunks) {
+            console.warn(`Missing chunks detected: expected ${expectedChunks}, received ${receivedChunks}`);
+            console.warn(`Missing ${expectedChunks - receivedChunks} chunks`);
+            
+            // Check which chunks are missing
+            const missingChunks = [];
+            for (let i = 0; i < expectedChunks; i++) {
+                if (!fileData.receivedChunks.has(i)) {
+                    missingChunks.push(i);
+                }
+            }
+            console.warn(`Missing chunk indices:`, missingChunks.slice(0, 10)); // Show first 10 missing chunks
         }
 
         // ✅ Show download button for user-triggered download
