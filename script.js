@@ -6,23 +6,7 @@ const STORE_NAME = window.CONFIG?.STORE_NAME || 'files';
 const KEEP_ALIVE_INTERVAL = window.CONFIG?.KEEP_ALIVE_INTERVAL || 30000;
 const CONNECTION_TIMEOUT = window.CONFIG?.CONNECTION_TIMEOUT || 60000;
 
-// Add simultaneous download message types
-const MESSAGE_TYPES = {
-    FILE_INFO: 'file-info',
-    FILE_HEADER: 'file-header',
-    FILE_CHUNK: 'file-chunk',
-    FILE_COMPLETE: 'file-complete',
-    BLOB_REQUEST: 'blob-request',
-    BLOB_REQUEST_FORWARDED: 'blob-request-forwarded',
-    BLOB_ERROR: 'blob-error',
-    CONNECTION_NOTIFICATION: 'connection-notification',
-    KEEP_ALIVE: 'keep-alive',
-    KEEP_ALIVE_RESPONSE: 'keep-alive-response',
-    DISCONNECT_NOTIFICATION: 'disconnect-notification',
-    SIMULTANEOUS_DOWNLOAD_REQUEST: 'simultaneous-download-request',
-    SIMULTANEOUS_DOWNLOAD_READY: 'simultaneous-download-ready',
-    SIMULTANEOUS_DOWNLOAD_START: 'simultaneous-download-start'
-};
+// Message types are now imported from constants.js via window.MESSAGE_TYPES
 
 // DOM Elements
 const elements = {
