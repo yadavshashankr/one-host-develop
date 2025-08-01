@@ -3196,6 +3196,15 @@ async function downloadLargeFileWithFileSystemAPI(blob, fileName) {
                         const progress = Math.round((i / totalChunks) * 100);
                         showNotification(`Saving file: ${progress}%`, 'info');
                     }
+                    
+                    // Check memory usage periodically during streaming
+                    if (i % 50 === 0) {
+                        const memoryCheck = checkMemoryUsageSafety();
+                        if (!memoryCheck.safe) {
+                            await writable.close();
+                            throw new Error(`Memory usage too high during save: ${memoryCheck.message}`);
+                        }
+                    }
                 }
             } else {
                 // For smaller files, write directly
@@ -3215,6 +3224,12 @@ async function downloadLargeFileWithFileSystemAPI(blob, fileName) {
         if (error.name === 'AbortError' || error.message.includes('user aborted')) {
             console.log('User cancelled file save');
             showNotification('File save cancelled', 'info');
+            return false;
+        }
+        
+        // Handle memory-related errors
+        if (error.message.includes('Memory usage too high')) {
+            showNotification(`Memory overload prevented: ${error.message}`, 'error');
             return false;
         }
         
@@ -3271,11 +3286,23 @@ async function shareFileOnMobile(blob, fileName) {
     }
 }
 
-// Function to download a blob
+// Function to download a blob with memory safety checks
 function downloadBlob(blob, fileName, fileId) {
+    // Perform comprehensive safety check before download
+    const safetyCheck = checkDownloadSafety(blob.size, fileName);
+    
+    // Show safety warning and get user confirmation if needed
+    if (!showMemorySafetyWarning(safetyCheck)) {
+        // User cancelled or download was blocked
+        if (fileId) {
+            markFileAsFailed(fileId, safetyCheck.message);
+        }
+        return;
+    }
+    
     // On mobile devices, use enhanced download system
     if (isMobileDevice()) {
-        downloadLargeFileMobile(blob, fileName);
+        downloadLargeFileMobile(blob, fileName, fileId);
     } else {
         // On desktop, use regular download
         performRegularDownload(blob, fileName, fileId);
@@ -3284,27 +3311,44 @@ function downloadBlob(blob, fileName, fileId) {
 
 // Enhanced mobile download function with optimized priority order for Android PWA
 // Following Gemini's recommendations for Android PWA file handling
-async function downloadLargeFileMobile(blob, fileName) {
-    // PRIORITY 1: File System Access API (best for Android PWA - native file picker)
-    // Supported on: Chrome Android, Edge Android, Samsung Internet, Android WebView
-    // Provides native file picker with user-selected location
-    if (await downloadLargeFileWithFileSystemAPI(blob, fileName)) {
-        return true;
+async function downloadLargeFileMobile(blob, fileName, fileId) {
+    try {
+        // PRIORITY 1: File System Access API (best for Android PWA - native file picker)
+        // Supported on: Chrome Android, Edge Android, Samsung Internet, Android WebView
+        // Provides native file picker with user-selected location
+        if (await downloadLargeFileWithFileSystemAPI(blob, fileName)) {
+            return true;
+        }
+        // PRIORITY 2: Web Share API (good fallback for mobile sharing)
+        // Works on most mobile browsers, lets user choose app to handle file
+        if (await shareFileOnMobile(blob, fileName)) {
+            return true;
+        }
+        // PRIORITY 3: Direct Download (reliable fallback - hands off to browser download manager)
+        // Uses <a> tag with download attribute - most reliable fallback
+        // Browser handles the download process, no memory issues
+        if (await downloadLargeFileWithDirectDownload(blob, fileName)) {
+            return true;
+        }
+        
+        // All methods failed
+        const errorMessage = 'Unable to save file. Please try on desktop or use a different browser.';
+        if (fileId) {
+            markFileAsFailed(fileId, errorMessage);
+        }
+        showNotification(errorMessage, 'error');
+        return false;
+        
+    } catch (error) {
+        console.error('Mobile download error:', error);
+        const errorMessage = `Download failed: ${error.message}`;
+        
+        if (fileId) {
+            markFileAsFailed(fileId, errorMessage);
+        }
+        showNotification(errorMessage, 'error');
+        return false;
     }
-    // PRIORITY 2: Web Share API (good fallback for mobile sharing)
-    // Works on most mobile browsers, lets user choose app to handle file
-    if (await shareFileOnMobile(blob, fileName)) {
-        return true;
-    }
-    // PRIORITY 3: Direct Download (reliable fallback - hands off to browser download manager)
-    // Uses <a> tag with download attribute - most reliable fallback
-    // Browser handles the download process, no memory issues
-    if (await downloadLargeFileWithDirectDownload(blob, fileName)) {
-        return true;
-    }
-    // Final fallback: show error
-    showNotification('Unable to save file. Please try on desktop or use a different browser.', 'error');
-    return false;
 }
 
 // Function to perform regular download (desktop or fallback)
@@ -4297,4 +4341,251 @@ function showFileDownloadNotification(fileName, action = 'downloaded', type = 's
     setTimeout(() => {
         notification.remove();
     }, 5000);
+}
+
+// Memory overload detection and prevention system
+const MEMORY_LIMITS = {
+    MOBILE: {
+        SAFE_SIZE: 50 * 1024 * 1024,      // 50MB - safe for mobile
+        WARNING_SIZE: 100 * 1024 * 1024,   // 100MB - warning threshold
+        DANGER_SIZE: 200 * 1024 * 1024,    // 200MB - likely to cause crash
+        MAX_SIZE: 500 * 1024 * 1024        // 500MB - absolute limit
+    },
+    TABLET: {
+        SAFE_SIZE: 100 * 1024 * 1024,      // 100MB - safe for tablet
+        WARNING_SIZE: 200 * 1024 * 1024,   // 200MB - warning threshold
+        DANGER_SIZE: 500 * 1024 * 1024,    // 500MB - likely to cause crash
+        MAX_SIZE: 1000 * 1024 * 1024       // 1GB - absolute limit
+    },
+    DESKTOP: {
+        SAFE_SIZE: 500 * 1024 * 1024,      // 500MB - safe for desktop
+        WARNING_SIZE: 1000 * 1024 * 1024,  // 1GB - warning threshold
+        DANGER_SIZE: 2000 * 1024 * 1024,   // 2GB - likely to cause crash
+        MAX_SIZE: 5000 * 1024 * 1024       // 5GB - absolute limit
+    }
+};
+
+// Memory monitoring system
+let memoryUsage = {
+    currentUsage: 0,
+    peakUsage: 0,
+    lastCheck: Date.now()
+};
+
+// Check if device is tablet
+function isTabletDevice() {
+    const userAgent = navigator.userAgent.toLowerCase();
+    const isTablet = /ipad|android(?!.*mobile)|tablet/i.test(userAgent);
+    const hasTouchScreen = 'ontouchstart' in window;
+    const hasLargeScreen = window.innerWidth >= 768 && window.innerHeight >= 1024;
+    
+    return isTablet || (hasTouchScreen && hasLargeScreen);
+}
+
+// Get device type for memory limits
+function getDeviceType() {
+    if (isTabletDevice()) return 'TABLET';
+    if (isMobileDevice()) return 'MOBILE';
+    return 'DESKTOP';
+}
+
+// Get memory limits for current device
+function getMemoryLimits() {
+    const deviceType = getDeviceType();
+    return MEMORY_LIMITS[deviceType];
+}
+
+// Estimate current memory usage
+function estimateMemoryUsage() {
+    try {
+        // Estimate based on stored chunks and blobs
+        let estimatedUsage = 0;
+        
+        // Count stored file chunks
+        for (const [fileId, fileData] of Object.entries(fileChunks)) {
+            if (fileData.chunks) {
+                estimatedUsage += fileData.chunks.reduce((total, chunk) => {
+                    return total + (chunk?.chunkData?.byteLength || 0);
+                }, 0);
+            }
+        }
+        
+        // Count fallback storage
+        for (const [fileId, chunks] of fallbackChunkStorage.entries()) {
+            estimatedUsage += chunks.reduce((total, chunk) => {
+                return total + (chunk?.chunkData?.byteLength || 0);
+            }, 0);
+        }
+        
+        memoryUsage.currentUsage = estimatedUsage;
+        memoryUsage.peakUsage = Math.max(memoryUsage.peakUsage, estimatedUsage);
+        memoryUsage.lastCheck = Date.now();
+        
+        return estimatedUsage;
+    } catch (error) {
+        console.error('Error estimating memory usage:', error);
+        return memoryUsage.currentUsage;
+    }
+}
+
+// Check if file size is safe for current device
+function checkFileSizeSafety(fileSize) {
+    const limits = getMemoryLimits();
+    const deviceType = getDeviceType();
+    
+    if (fileSize > limits.MAX_SIZE) {
+        return {
+            safe: false,
+            level: 'BLOCKED',
+            message: `File too large (${formatFileSize(fileSize)}). Maximum size for ${deviceType.toLowerCase()} is ${formatFileSize(limits.MAX_SIZE)}.`,
+            reason: 'SIZE_EXCEEDS_LIMIT'
+        };
+    }
+    
+    if (fileSize > limits.DANGER_SIZE) {
+        return {
+            safe: false,
+            level: 'DANGER',
+            message: `Large file detected (${formatFileSize(fileSize)}). This may cause browser crash on ${deviceType.toLowerCase()}.`,
+            reason: 'SIZE_DANGEROUS'
+        };
+    }
+    
+    if (fileSize > limits.WARNING_SIZE) {
+        return {
+            safe: true,
+            level: 'WARNING',
+            message: `Large file (${formatFileSize(fileSize)}). Proceed with caution on ${deviceType.toLowerCase()}.`,
+            reason: 'SIZE_WARNING'
+        };
+    }
+    
+    return {
+        safe: true,
+        level: 'SAFE',
+        message: `File size is safe for ${deviceType.toLowerCase()}.`,
+        reason: 'SIZE_SAFE'
+    };
+}
+
+// Check if current memory usage is safe
+function checkMemoryUsageSafety() {
+    const currentUsage = estimateMemoryUsage();
+    const limits = getMemoryLimits();
+    const deviceType = getDeviceType();
+    
+    // If we're already using more than 80% of safe limit, be cautious
+    const safeThreshold = limits.SAFE_SIZE * 0.8;
+    
+    if (currentUsage > safeThreshold) {
+        return {
+            safe: false,
+            level: 'WARNING',
+            message: `High memory usage detected (${formatFileSize(currentUsage)}). Consider clearing some files.`,
+            reason: 'MEMORY_HIGH'
+        };
+    }
+    
+    return {
+        safe: true,
+        level: 'SAFE',
+        message: `Memory usage is safe (${formatFileSize(currentUsage)}).`,
+        reason: 'MEMORY_SAFE'
+    };
+}
+
+// Comprehensive safety check for file download
+function checkDownloadSafety(fileSize, fileName) {
+    const sizeCheck = checkFileSizeSafety(fileSize);
+    const memoryCheck = checkMemoryUsageSafety();
+    const deviceType = getDeviceType();
+    
+    // If either check fails, block the download
+    if (!sizeCheck.safe || !memoryCheck.safe) {
+        return {
+            safe: false,
+            level: Math.max(sizeCheck.level === 'BLOCKED' ? 3 : 2, memoryCheck.level === 'WARNING' ? 1 : 0),
+            message: sizeCheck.message || memoryCheck.message,
+            reason: sizeCheck.reason || memoryCheck.reason,
+            deviceType: deviceType,
+            fileSize: fileSize
+        };
+    }
+    
+    // If both checks pass but there are warnings, show them
+    if (sizeCheck.level === 'WARNING' || memoryCheck.level === 'WARNING') {
+        return {
+            safe: true,
+            level: 'WARNING',
+            message: `${sizeCheck.message} ${memoryCheck.message}`,
+            reason: 'WARNING_ONLY',
+            deviceType: deviceType,
+            fileSize: fileSize
+        };
+    }
+    
+    return {
+        safe: true,
+        level: 'SAFE',
+        message: `Download is safe for ${deviceType.toLowerCase()}.`,
+        reason: 'ALL_SAFE',
+        deviceType: deviceType,
+        fileSize: fileSize
+    };
+}
+
+// Update file list item with error state
+function markFileAsFailed(fileId, errorMessage) {
+    const listItem = document.querySelector(`[data-file-id="${fileId}"]`);
+    if (listItem) {
+        // Add error styling
+        listItem.classList.remove('download-ready', 'downloading', 'download-completed');
+        listItem.classList.add('download-failed');
+        listItem.style.backgroundColor = '#ffebee'; // Light red background
+        listItem.style.borderLeft = '4px solid #f44336'; // Red border
+        
+        // Update download button
+        const downloadButton = listItem.querySelector('.icon-button');
+        if (downloadButton) {
+            downloadButton.innerHTML = '<span class="material-icons" style="color: #f44336;">error</span>';
+            downloadButton.title = `Download failed: ${errorMessage}`;
+            downloadButton.style.color = '#f44336';
+        }
+        
+        // Add error message
+        const errorElement = listItem.querySelector('.file-error') || document.createElement('div');
+        errorElement.className = 'file-error';
+        errorElement.style.color = '#f44336';
+        errorElement.style.fontSize = '12px';
+        errorElement.style.marginTop = '4px';
+        errorElement.textContent = errorMessage;
+        
+        if (!listItem.querySelector('.file-error')) {
+            listItem.appendChild(errorElement);
+        }
+    }
+}
+
+// Show memory safety warning
+function showMemorySafetyWarning(safetyCheck) {
+    const { level, message, deviceType, fileSize } = safetyCheck;
+    
+    if (level === 'BLOCKED') {
+        showNotification(`🚫 ${message}`, 'error');
+        return false;
+    }
+    
+    if (level === 'DANGER') {
+        const confirmed = confirm(`⚠️ WARNING: ${message}\n\nThis file may cause your browser to crash.\n\nDo you want to proceed anyway?`);
+        if (!confirmed) {
+            showNotification('Download cancelled by user', 'info');
+            return false;
+        }
+    }
+    
+    if (level === 'WARNING') {
+        showNotification(`⚠️ ${message}`, 'warning');
+    }
+    
+    return true;
 }

@@ -542,6 +542,30 @@ input[type="file"] {
     background-color: rgba(76, 175, 80, 0.1);  /* Light green background for button */
 }
 
+/* Error state styles for failed downloads */
+.files-list li.download-failed {
+    background-color: #ffebee;
+    border-left: 4px solid var(--error-color);
+    animation: errorShake 0.5s ease-in-out;
+}
+
+.icon-button.download-failed {
+    color: var(--error-color);
+}
+
+.file-error {
+    color: var(--error-color);
+    font-size: 12px;
+    margin-top: 4px;
+    font-weight: 500;
+}
+
+@keyframes errorShake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
 /* Peer ID editing styles */
 .peer-id-display {
     display: flex;
