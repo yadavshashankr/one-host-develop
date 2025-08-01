@@ -3160,7 +3160,7 @@ function reconnectToPeer(peerId) {
     }
 }
 
-// Function to download large file using File System Access API
+// Function to download large file using File System Access API with streaming
 async function downloadLargeFileWithFileSystemAPI(blob, fileName) {
     try {
         // Check if File System Access API is supported
@@ -3176,52 +3176,72 @@ async function downloadLargeFileWithFileSystemAPI(blob, fileName) {
                 }]
             });
             
-            // Create writable stream
+            // Create writable stream for memory-efficient writing
             const writable = await fileHandle.createWritable();
             
-            // Write the blob data
-            await writable.write(blob);
+            // For large files, use streaming approach to avoid memory issues
+            if (blob.size > 10 * 1024 * 1024) { // 10MB threshold
+                // Stream the blob in chunks to avoid memory overload
+                const chunkSize = 1024 * 1024; // 1MB chunks
+                const totalChunks = Math.ceil(blob.size / chunkSize);
+                
+                for (let i = 0; i < totalChunks; i++) {
+                    const start = i * chunkSize;
+                    const end = Math.min(start + chunkSize, blob.size);
+                    const chunk = blob.slice(start, end);
+                    await writable.write(chunk);
+                    
+                    // Update progress every 10 chunks
+                    if (i % 10 === 0) {
+                        const progress = Math.round((i / totalChunks) * 100);
+                        showNotification(`Saving file: ${progress}%`, 'info');
+                    }
+                }
+            } else {
+                // For smaller files, write directly
+                await writable.write(blob);
+            }
+            
             await writable.close();
             
-            showNotification('File saved successfully!', 'success');
+            showFileDownloadNotification(fileName, 'saved', 'success');
             return true;
         }
         return false;
     } catch (error) {
         console.error('File System Access API error:', error);
+        
+        // Handle user cancellation gracefully
+        if (error.name === 'AbortError' || error.message.includes('user aborted')) {
+            console.log('User cancelled file save');
+            showNotification('File save cancelled', 'info');
+            return false;
+        }
+        
         return false;
     }
 }
 
-// Function to download large file using IndexedDB
-async function downloadLargeFileWithIndexedDB(blob, fileName) {
+// Function to download large file using direct download (memory-safe fallback)
+async function downloadLargeFileWithDirectDownload(blob, fileName) {
     try {
-        const db = await initIndexedDB();
-        const transaction = db.transaction(['largeFiles'], 'readwrite');
-        const store = transaction.objectStore('largeFiles');
-        
-        // Store file metadata and blob
-        await store.put({
-            id: fileName + '_' + Date.now(),
-            name: fileName,
-            blob: blob,
-            size: blob.size,
-            type: blob.type,
-            timestamp: Date.now()
-        });
-        
-        // Create a download link for the stored file
+        // Simple direct download - no memory duplication
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = fileName;
+        a.style.display = 'none';
+        document.body.appendChild(a);
         a.click();
+        document.body.removeChild(a);
         
-        URL.revokeObjectURL(url);
-        showNotification('File downloaded and stored locally!', 'success');
+        // Cleanup immediately
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+        
+        showFileDownloadNotification(fileName, 'download started', 'success');
         return true;
     } catch (error) {
-        console.error('IndexedDB error:', error);
+        console.error('Direct download error:', error);
         return false;
     }
 }
@@ -3262,17 +3282,23 @@ function downloadBlob(blob, fileName, fileId) {
     }
 }
 
-// Enhanced mobile download function with multiple fallbacks
+// Enhanced mobile download function with optimized priority order for Android PWA
+// Following Gemini's recommendations for Android PWA file handling
 async function downloadLargeFileMobile(blob, fileName) {
-    // PRIORITY 1: Web Share API (lowest memory usage, best UX)
-    if (await shareFileOnMobile(blob, fileName)) {
-        return true;
-    }
-    // PRIORITY 2: File System Access API (native file picker)
+    // PRIORITY 1: File System Access API (best for Android PWA - native file picker)
+    // Supported on: Chrome Android, Edge Android, Samsung Internet, Android WebView
+    // Provides native file picker with user-selected location
     if (await downloadLargeFileWithFileSystemAPI(blob, fileName)) {
         return true;
     }
-    // PRIORITY 3: Direct Download (simple, reliable, memory-safe)
+    // PRIORITY 2: Web Share API (good fallback for mobile sharing)
+    // Works on most mobile browsers, lets user choose app to handle file
+    if (await shareFileOnMobile(blob, fileName)) {
+        return true;
+    }
+    // PRIORITY 3: Direct Download (reliable fallback - hands off to browser download manager)
+    // Uses <a> tag with download attribute - most reliable fallback
+    // Browser handles the download process, no memory issues
     if (await downloadLargeFileWithDirectDownload(blob, fileName)) {
         return true;
     }
@@ -4235,25 +4261,7 @@ document.addEventListener('DOMContentLoaded', () => {
 window.PWAManager = pwaManager;
 window.MobileOptimizer = mobileOptimizer;
 
-// Function to download large file using direct download (memory-safe fallback)
-async function downloadLargeFileWithDirectDownload(blob, fileName) {
-    try {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 100);
-        showFileDownloadNotification(fileName, 'download started', 'success');
-        return true;
-    } catch (error) {
-        console.error('Direct download error:', error);
-        return false;
-    }
-}
+
 
 // Specialized function for file download notifications with better deduplication
 function showFileDownloadNotification(fileName, action = 'downloaded', type = 'success') {
