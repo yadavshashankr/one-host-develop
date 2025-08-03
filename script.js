@@ -4436,9 +4436,14 @@ class MobileOptimizer {
     optimizeFileInput() {
         const fileInput = document.getElementById('file-input');
         if (fileInput) {
-            // Add mobile-specific attributes
-            fileInput.setAttribute('capture', 'environment');
-            fileInput.setAttribute('accept', 'image/*,video/*,audio/*,application/*');
+            // ✅ iOS FIX: Remove capture attribute to allow full file picker
+            // Remove any existing capture attribute that forces camera
+            fileInput.removeAttribute('capture');
+            
+            // ✅ iOS FIX: Set comprehensive accept attribute for full file picker
+            fileInput.setAttribute('accept', '*/*');
+            
+            console.log('File input optimized for iOS: capture removed, accept="*/*"');
         }
     }
 }
