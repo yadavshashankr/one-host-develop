@@ -1289,23 +1289,54 @@ async function createStreamingBlob(fileId, totalChunks, fileType, fileSize) {
     try {
         console.log(`Creating streaming blob for ${totalChunks} chunks`);
         
-        // ✅ NEW: Use ReadableStream for true streaming
+        // ✅ iOS OPTIMIZATION: Check iOS version and device capabilities
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        const isOldIOS = isIOS && /OS 1[0-3]|OS 14_[0-4]/.test(navigator.userAgent);
+        const isLargeFile = fileSize > 100 * 1024 * 1024; // 100MB threshold
+        
+        console.log(`iOS Detection: isIOS=${isIOS}, isOldIOS=${isOldIOS}, isLargeFile=${isLargeFile}`);
+        
+        // ✅ iOS OPTIMIZATION: Force chunk-by-chunk for older iOS or large files
+        if (isOldIOS || (isIOS && isLargeFile)) {
+            console.log('iOS Optimization: Using chunk-by-chunk method for better compatibility');
+            return await createChunkByChunkBlob(fileId, totalChunks, fileType, fileSize);
+        }
+        
+        // ✅ NEW: Use ReadableStream for true streaming (modern browsers and newer iOS)
         if (typeof ReadableStream !== 'undefined' && typeof Blob !== 'undefined' && Blob.prototype.stream) {
+            console.log('Using ReadableStream for streaming blob creation');
             return await createReadableStreamBlob(fileId, totalChunks, fileType, fileSize);
         }
         
         // ✅ FALLBACK: Use chunk-by-chunk blob creation for older browsers
+        console.log('Fallback: Using chunk-by-chunk blob creation');
         return await createChunkByChunkBlob(fileId, totalChunks, fileType, fileSize);
         
     } catch (error) {
         console.error('Error creating streaming blob:', error);
+        
+        // ✅ iOS OPTIMIZATION: Fallback to chunk-by-chunk on any error for iOS
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        if (isIOS) {
+            console.log('iOS Error Recovery: Falling back to chunk-by-chunk method');
+            return await createChunkByChunkBlob(fileId, totalChunks, fileType, fileSize);
+        }
+        
         throw error;
     }
 }
 
-// ✅ NEW: Create blob using ReadableStream (modern browsers)
+// ✅ NEW: Create blob using ReadableStream (modern browsers) with iOS optimizations
 async function createReadableStreamBlob(fileId, totalChunks, fileType, fileSize) {
     console.log('Using ReadableStream for streaming blob creation');
+    
+    // ✅ iOS OPTIMIZATION: Check if we're on iOS for performance tuning
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isOldIOS = isIOS && /OS 1[0-3]|OS 14_[0-4]/.test(navigator.userAgent);
+    
+    // ✅ iOS OPTIMIZATION: Adjust chunk processing for iOS performance
+    const chunkDelay = isOldIOS ? 5 : 1; // Longer delays for older iOS
+    const progressInterval = isOldIOS ? 5 : 10; // Less frequent progress updates
     
     const stream = new ReadableStream({
         async start(controller) {
@@ -1330,13 +1361,20 @@ async function createReadableStreamBlob(fileId, totalChunks, fileType, fileSize)
                     totalSize += uint8Array.length;
                     processedChunks++;
                     
-                    // Update progress
-                    const progress = (processedChunks / totalChunks) * 100;
-                    updateProgress(progress, fileId);
+                    // ✅ iOS OPTIMIZATION: Update progress less frequently on older iOS
+                    if (chunkIndex % progressInterval === 0) {
+                        const progress = (processedChunks / totalChunks) * 100;
+                        updateProgress(progress, fileId);
+                    }
                     
-                    // Small delay for UI responsiveness
+                    // ✅ iOS OPTIMIZATION: Longer delays for older iOS devices
                     if (chunkIndex % 10 === 0) {
-                        await new Promise(resolve => setTimeout(resolve, 1));
+                        await new Promise(resolve => setTimeout(resolve, chunkDelay));
+                    }
+                    
+                    // ✅ iOS OPTIMIZATION: Force garbage collection on older iOS
+                    if (isOldIOS && chunkIndex % 20 === 0 && window.gc) {
+                        window.gc();
                     }
                 }
                 
@@ -1360,9 +1398,13 @@ async function createReadableStreamBlob(fileId, totalChunks, fileType, fileSize)
     });
 }
 
-// ✅ NEW: Create blob chunk by chunk (fallback for older browsers)
+// ✅ NEW: Create blob chunk by chunk (fallback for older browsers) with iOS optimizations
 async function createChunkByChunkBlob(fileId, totalChunks, fileType, fileSize) {
     console.log('Using chunk-by-chunk blob creation (fallback)');
+    
+    // ✅ iOS OPTIMIZATION: Check iOS version for performance tuning
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isOldIOS = isIOS && /OS 1[0-3]|OS 14_[0-4]/.test(navigator.userAgent);
     
     const blobParts = [];
     let totalSize = 0;
@@ -1385,25 +1427,41 @@ async function createChunkByChunkBlob(fileId, totalChunks, fileType, fileSize) {
         const progress = ((chunkIndex + 1) / totalChunks) * 100;
         updateProgress(progress, fileId);
         
-        // Small delay for UI responsiveness
+        // ✅ iOS OPTIMIZATION: Longer delays for older iOS devices
+        const delay = isOldIOS ? 5 : 1;
         if (chunkIndex % 10 === 0) {
-            await new Promise(resolve => setTimeout(resolve, 1));
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
         
-        // ✅ MEMORY OPTIMIZATION: Clear previous chunks from memory
-        if (chunkIndex > 0 && chunkIndex % 50 === 0) {
-            // Keep only recent chunks in memory to prevent accumulation
-            blobParts.splice(0, Math.floor(blobParts.length / 2));
+        // ✅ iOS OPTIMIZATION: More aggressive memory management for iOS
+        if (isIOS && chunkIndex > 0 && chunkIndex % 30 === 0) {
+            // Force garbage collection if available
+            if (window.gc) {
+                window.gc();
+            }
+            
+            // Small delay to allow garbage collection
+            await new Promise(resolve => setTimeout(resolve, 2));
         }
     }
     
     console.log(`Chunk-by-chunk completed: ${totalChunks} chunks, ${totalSize} bytes`);
     
-    // Create final blob
-    return new Blob(blobParts, { 
+    // ✅ iOS OPTIMIZATION: Validate blob size before returning
+    const finalBlob = new Blob(blobParts, { 
         type: fileType,
         lastModified: Date.now()
     });
+    
+    console.log(`Final blob created: size=${finalBlob.size}, expected=${fileSize}, chunks=${blobParts.length}`);
+    
+    // Validate that we have the correct file size
+    if (Math.abs(finalBlob.size - fileSize) > 1024) { // 1KB tolerance
+        console.warn(`Blob size mismatch: expected ${fileSize}, got ${finalBlob.size}`);
+        console.warn(`This may indicate incomplete file transfer or chunk loss`);
+    }
+    
+    return finalBlob;
 }
 
 // ✅ NEW: Get a single chunk by index (memory-efficient)
