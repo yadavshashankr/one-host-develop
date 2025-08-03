@@ -1143,11 +1143,11 @@ async function downloadWithFileSystemAPI(fileId, fileName, fileType, fileSize) {
     }
 }
 
-// ✅ NEW: Native download with chunked blob (works on ALL devices)
+// ✅ NEW: Native download with streaming from IndexedDB (works on ALL devices)
 async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSize) {
     try {
         // Get chunks from storage with comprehensive validation
-        console.log(`=== DOWNLOAD START ===`);
+        console.log(`=== STREAMING DOWNLOAD START ===`);
         console.log(`Downloading file: ${fileName} (${fileId})`);
         console.log(`File size: ${fileSize}, File type: ${fileType}`);
         
@@ -1183,98 +1183,33 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
             console.log(`Similar fileIds found:`, similarFileIds);
         }
         
-        const chunks = await getFileChunks(fileId);
+        // ✅ NEW: Get total chunk count first for validation
+        const totalChunks = await getTotalChunkCount(fileId);
+        console.log(`Total chunks to process: ${totalChunks}`);
         
-        console.log(`Download: Retrieved ${chunks.length} chunks for ${fileId}`);
-        console.log(`Download: Chunk details:`, chunks.map(c => ({
-            index: c.chunkIndex,
-            size: c.chunkData?.byteLength,
-            valid: c.chunkData && typeof c.chunkData.byteLength === 'number'
-        })));
-        
-        if (chunks.length === 0) {
+        if (totalChunks === 0) {
             throw new Error('No file chunks found');
         }
         
-        if (chunks.length === 0) {
-            console.error(`No chunks found for ${fileId} - running debug`);
-            listAllAvailableFiles();
-            throw new Error('No file chunks found');
-        }
-        
-        // Validate all chunks have valid data
-        const invalidChunks = chunks.filter(c => !c.chunkData || typeof c.chunkData.byteLength === 'undefined');
-        if (invalidChunks.length > 0) {
-            console.error(`Found ${invalidChunks.length} invalid chunks:`, invalidChunks);
-            throw new Error(`Found ${invalidChunks.length} invalid chunks - file may be corrupted`);
-        }
-        
-        // Validate chunks before reassembly
+        // Validate chunks before streaming
         const isValid = await validateAndRepairChunks(fileId, fileSize);
         if (!isValid) {
             throw new Error('File chunks validation failed - file may be corrupted or incomplete');
         }
         
-        // Verify file integrity before reassembly
+        // Verify file integrity before streaming
         const expectedChunks = Math.ceil(fileSize / (256 * 1024)); // 256KB chunks
         await verifyFileIntegrity(fileId, fileSize, expectedChunks);
         
-        // Robust chunk reassembly with perfect ordering and metadata preservation
-        chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        console.log(`Streaming file: ${totalChunks} chunks, expected size: ${fileSize}`);
         
-        console.log(`Reassembling file: ${chunks.length} chunks, expected size: ${fileSize}`);
-        console.log(`Chunk indices:`, chunks.map(c => c.chunkIndex));
+        // ✅ NEW: Create streaming blob without loading all chunks into memory
+        const streamingBlob = await createStreamingBlob(fileId, totalChunks, fileType, fileSize);
         
-        // Verify chunk integrity and completeness
-        if (chunks.length !== expectedChunks) {
-            console.warn(`Chunk count mismatch: expected ${expectedChunks}, got ${chunks.length}`);
-        }
-        
-        // Calculate total size from chunks for verification
-        let totalChunkSize = 0;
-        const chunkBuffers = [];
-        
-        // Process chunks sequentially to ensure perfect order
-        for (let i = 0; i < chunks.length; i++) {
-            const chunk = chunks[i];
-            
-            // Verify chunk index matches expected order
-            if (chunk.chunkIndex !== i) {
-                console.error(`Chunk order mismatch: expected index ${i}, got ${chunk.chunkIndex}`);
-                throw new Error(`Chunk order corrupted: expected ${i}, got ${chunk.chunkIndex}`);
-            }
-            
-            // Convert Uint8Array to ArrayBuffer
-            const arrayBuffer = chunk.chunkData.buffer || chunk.chunkData;
-            chunkBuffers.push(arrayBuffer);
-            totalChunkSize += arrayBuffer.byteLength;
-            
-            // Update progress
-            const progress = ((i + 1) / chunks.length) * 100;
-            updateProgress(progress, fileId);
-            
-            // Minimal delay for UI responsiveness
-            if (i % 10 === 0) {
-                await new Promise(resolve => setTimeout(resolve, 1));
-            }
-        }
-        
-        // Verify total size matches expected
-        console.log(`Total chunk size: ${totalChunkSize}, expected: ${fileSize}`);
-        if (Math.abs(totalChunkSize - fileSize) > 1024) { // 1KB tolerance
-            console.warn(`Size mismatch: expected ${fileSize}, got ${totalChunkSize}`);
-        }
-        
-        // Create final blob with exact metadata
-        const finalBlob = new Blob(chunkBuffers, { 
-            type: fileType,
-            lastModified: Date.now()
-        });
-        
-        console.log(`Final blob created: size=${finalBlob.size}, type=${finalBlob.type}`);
+        console.log(`Streaming blob created: size=${streamingBlob.size}, type=${streamingBlob.type}`);
         
         // Download using native method
-        const url = URL.createObjectURL(finalBlob);
+        const url = URL.createObjectURL(streamingBlob);
         const a = document.createElement('a');
         a.href = url;
         a.download = fileName;
@@ -1286,24 +1221,244 @@ async function downloadWithNativeChunkedBlob(fileId, fileName, fileType, fileSiz
         // Clean up
         setTimeout(() => {
             URL.revokeObjectURL(url);
-            // Clear chunk buffers from memory
-            chunkBuffers.length = 0;
         }, 1000);
         
         // Verify file integrity
-        if (finalBlob.size !== fileSize) {
-            console.warn(`File size verification failed: expected ${fileSize}, got ${finalBlob.size}`);
+        if (streamingBlob.size !== fileSize) {
+            console.warn(`File size verification failed: expected ${fileSize}, got ${streamingBlob.size}`);
         }
         
-        console.log('File downloaded with native chunked blob');
-        console.log(`File integrity: size=${finalBlob.size}, type=${finalBlob.type}, chunks=${chunks.length}`);
+        console.log('File downloaded with streaming blob');
+        console.log(`File integrity: size=${streamingBlob.size}, type=${streamingBlob.type}, chunks=${totalChunks}`);
         showFileDownloadNotification(fileName, 'downloaded', 'success');
         
         return true;
         
     } catch (error) {
-        console.error('Native chunked blob download failed:', error);
+        console.error('Streaming blob download failed:', error);
         throw error;
+    }
+}
+
+// ✅ NEW: Get total chunk count without loading all chunks
+async function getTotalChunkCount(fileId) {
+    try {
+        // Try local fileChunks first (fastest)
+        const fileData = fileChunks[fileId];
+        if (fileData && fileData.chunks) {
+            return fileData.chunks.filter(c => c !== undefined).length;
+        }
+        
+        // Try IndexedDB count
+        if (isIndexedDBSupported()) {
+            const db = await initIndexedDB();
+            if (db) {
+                const transaction = db.transaction(['fileChunks'], 'readonly');
+                const store = transaction.objectStore('fileChunks');
+                
+                return new Promise((resolve, reject) => {
+                    const request = store.count(IDBKeyRange.only(fileId));
+                    
+                    request.onsuccess = function() {
+                        resolve(request.result);
+                    };
+                    
+                    request.onerror = function() {
+                        console.error(`IndexedDB count error for ${fileId}:`, request.error);
+                        resolve(0);
+                    };
+                });
+            }
+        }
+        
+        // Fallback to in-memory storage
+        if (fallbackChunkStorage.has(fileId)) {
+            return fallbackChunkStorage.get(fileId).length;
+        }
+        
+        return 0;
+        
+    } catch (error) {
+        console.error('Error getting chunk count:', error);
+        return 0;
+    }
+}
+
+// ✅ NEW: Create streaming blob by reading chunks one at a time
+async function createStreamingBlob(fileId, totalChunks, fileType, fileSize) {
+    try {
+        console.log(`Creating streaming blob for ${totalChunks} chunks`);
+        
+        // ✅ NEW: Use ReadableStream for true streaming
+        if (typeof ReadableStream !== 'undefined' && typeof Blob !== 'undefined' && Blob.prototype.stream) {
+            return await createReadableStreamBlob(fileId, totalChunks, fileType, fileSize);
+        }
+        
+        // ✅ FALLBACK: Use chunk-by-chunk blob creation for older browsers
+        return await createChunkByChunkBlob(fileId, totalChunks, fileType, fileSize);
+        
+    } catch (error) {
+        console.error('Error creating streaming blob:', error);
+        throw error;
+    }
+}
+
+// ✅ NEW: Create blob using ReadableStream (modern browsers)
+async function createReadableStreamBlob(fileId, totalChunks, fileType, fileSize) {
+    console.log('Using ReadableStream for streaming blob creation');
+    
+    const stream = new ReadableStream({
+        async start(controller) {
+            try {
+                let processedChunks = 0;
+                let totalSize = 0;
+                
+                // Process chunks one at a time
+                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                    const chunk = await getSingleChunk(fileId, chunkIndex);
+                    
+                    if (!chunk || !chunk.chunkData) {
+                        throw new Error(`Missing chunk at index ${chunkIndex}`);
+                    }
+                    
+                    // Convert to Uint8Array for streaming
+                    const uint8Array = new Uint8Array(chunk.chunkData.buffer || chunk.chunkData);
+                    
+                    // Enqueue chunk to stream
+                    controller.enqueue(uint8Array);
+                    
+                    totalSize += uint8Array.length;
+                    processedChunks++;
+                    
+                    // Update progress
+                    const progress = (processedChunks / totalChunks) * 100;
+                    updateProgress(progress, fileId);
+                    
+                    // Small delay for UI responsiveness
+                    if (chunkIndex % 10 === 0) {
+                        await new Promise(resolve => setTimeout(resolve, 1));
+                    }
+                }
+                
+                console.log(`Streaming completed: ${processedChunks} chunks, ${totalSize} bytes`);
+                controller.close();
+                
+            } catch (error) {
+                console.error('Error in ReadableStream:', error);
+                controller.error(error);
+            }
+        }
+    });
+    
+    // Create blob from stream
+    const blob = await new Response(stream).blob();
+    
+    // Set correct type
+    return new Blob([blob], { 
+        type: fileType,
+        lastModified: Date.now()
+    });
+}
+
+// ✅ NEW: Create blob chunk by chunk (fallback for older browsers)
+async function createChunkByChunkBlob(fileId, totalChunks, fileType, fileSize) {
+    console.log('Using chunk-by-chunk blob creation (fallback)');
+    
+    const blobParts = [];
+    let totalSize = 0;
+    
+    // Process chunks one at a time
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const chunk = await getSingleChunk(fileId, chunkIndex);
+        
+        if (!chunk || !chunk.chunkData) {
+            throw new Error(`Missing chunk at index ${chunkIndex}`);
+        }
+        
+        // Convert to ArrayBuffer
+        const arrayBuffer = chunk.chunkData.buffer || chunk.chunkData;
+        blobParts.push(arrayBuffer);
+        
+        totalSize += arrayBuffer.byteLength;
+        
+        // Update progress
+        const progress = ((chunkIndex + 1) / totalChunks) * 100;
+        updateProgress(progress, fileId);
+        
+        // Small delay for UI responsiveness
+        if (chunkIndex % 10 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 1));
+        }
+        
+        // ✅ MEMORY OPTIMIZATION: Clear previous chunks from memory
+        if (chunkIndex > 0 && chunkIndex % 50 === 0) {
+            // Keep only recent chunks in memory to prevent accumulation
+            blobParts.splice(0, Math.floor(blobParts.length / 2));
+        }
+    }
+    
+    console.log(`Chunk-by-chunk completed: ${totalChunks} chunks, ${totalSize} bytes`);
+    
+    // Create final blob
+    return new Blob(blobParts, { 
+        type: fileType,
+        lastModified: Date.now()
+    });
+}
+
+// ✅ NEW: Get a single chunk by index (memory-efficient)
+async function getSingleChunk(fileId, chunkIndex) {
+    try {
+        // Try local fileChunks first (fastest)
+        const fileData = fileChunks[fileId];
+        if (fileData && fileData.chunks && fileData.chunks[chunkIndex]) {
+            return {
+                fileId: fileId,
+                chunkData: fileData.chunks[chunkIndex],
+                chunkIndex: chunkIndex,
+                timestamp: Date.now()
+            };
+        }
+        
+        // Try IndexedDB
+        if (isIndexedDBSupported()) {
+            const db = await initIndexedDB();
+            if (db) {
+                const transaction = db.transaction(['fileChunks'], 'readonly');
+                const store = transaction.objectStore('fileChunks');
+                
+                return new Promise((resolve, reject) => {
+                    const request = store.get(IDBKeyRange.only(`${fileId}_${chunkIndex}`));
+                    
+                    request.onsuccess = function() {
+                        const chunk = request.result;
+                        if (chunk && chunk.chunkIndex === chunkIndex) {
+                            resolve(chunk);
+                        } else {
+                            resolve(null);
+                        }
+                    };
+                    
+                    request.onerror = function() {
+                        console.error(`IndexedDB get error for chunk ${chunkIndex}:`, request.error);
+                        resolve(null);
+                    };
+                });
+            }
+        }
+        
+        // Fallback to in-memory storage
+        if (fallbackChunkStorage.has(fileId)) {
+            const chunks = fallbackChunkStorage.get(fileId);
+            const chunk = chunks.find(c => c.chunkIndex === chunkIndex);
+            return chunk || null;
+        }
+        
+        return null;
+        
+    } catch (error) {
+        console.error(`Error getting chunk ${chunkIndex}:`, error);
+        return null;
     }
 }
 
