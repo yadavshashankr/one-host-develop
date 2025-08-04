@@ -2530,11 +2530,6 @@ async function requestAndDownloadBlob(fileInfo) {
             });
         }
 
-        // Show progress for streaming download
-        elements.transferProgress.classList.remove('hidden');
-        updateProgress(0, fileInfo.id);
-        updateTransferInfo(`Requesting ${fileInfo.name}...`);
-
         // Request streaming download
         conn.send({
             type: 'streaming-request',
@@ -2548,8 +2543,6 @@ async function requestAndDownloadBlob(fileInfo) {
     } catch (error) {
         console.error('Error requesting streaming download:', error);
         showNotification(`Failed to download file: ${error.message}`, 'error');
-        elements.transferProgress.classList.add('hidden');
-        updateTransferInfo('');
     }
 }
 
@@ -2735,9 +2728,6 @@ async function sendFile(file) {
 
     try {
         transferInProgress = true;
-        elements.transferProgress.classList.remove('hidden');
-        updateProgress(0);
-        updateTransferInfo(`Sending ${file.name}...`);
 
         // Generate a unique file ID that will be same for all recipients
         const fileId = generateFileId(file);
@@ -2774,36 +2764,36 @@ async function sendFile(file) {
             }
         }
 
-                    if (successCount > 0) {
-                // Store the file for later streaming download
-                console.log(`About to store file:`, {
-                    fileId: fileId,
-                    file: file,
-                    fileType: typeof file,
-                    fileConstructor: file?.constructor?.name,
-                    fileSize: file?.size,
-                    fileName: file?.name
-                });
-                
-                sentFilesStore.set(fileId, file);
-                console.log(`File stored for streaming: ${fileId}`);
-                console.log(`File details stored:`, {
-                    name: file.name,
-                    size: file.size,
-                    type: file.type
-                });
-                console.log(`Sent files store now contains:`, Array.from(sentFilesStore.keys()));
-                
-                // Verify storage immediately
-                const storedFile = sentFilesStore.get(fileId);
-                console.log(`Immediately retrieved file:`, {
-                    storedFile: storedFile,
-                    storedFileType: typeof storedFile,
-                    storedFileConstructor: storedFile?.constructor?.name,
-                    storedFileSize: storedFile?.size,
-                    storedFileName: storedFile?.name
-                });
+        if (successCount > 0) {
+            // Store the file for later streaming download
+            console.log(`About to store file:`, {
+                fileId: fileId,
+                file: file,
+                fileType: typeof file,
+                fileConstructor: file?.constructor?.name,
+                fileSize: file?.size,
+                fileName: file?.name
+            });
             
+            sentFilesStore.set(fileId, file);
+            console.log(`File stored for streaming: ${fileId}`);
+            console.log(`File details stored:`, {
+                name: file.name,
+                size: file.size,
+                type: file.type
+            });
+            console.log(`Sent files store now contains:`, Array.from(sentFilesStore.keys()));
+            
+            // Verify storage immediately
+            const storedFile = sentFilesStore.get(fileId);
+            console.log(`Immediately retrieved file:`, {
+                storedFile: storedFile,
+                storedFileType: typeof storedFile,
+                storedFileConstructor: storedFile?.constructor?.name,
+                storedFileSize: storedFile?.size,
+                storedFileName: storedFile?.name
+            });
+        
             // Add file to UI history so it appears in sent files list
             const fileInfo = {
                 id: fileId,
@@ -2824,8 +2814,6 @@ async function sendFile(file) {
         throw error; // Propagate error for queue processing
     } finally {
         transferInProgress = false;
-        elements.transferProgress.classList.add('hidden');
-        updateProgress(0);
         // Process next file in queue if any
         processFileQueue();
     }
