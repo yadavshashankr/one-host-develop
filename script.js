@@ -1652,7 +1652,7 @@ async function sendFileStreaming(file, conn, fileId) {
         // Optimized chunk size for network performance
         // Larger chunks = fewer network round trips = faster transfers
         // 256KB provides optimal balance between memory usage and network efficiency
-        const chunkSize = 256 * 1024; // 256KB chunks for optimal performance
+        const chunkSize = 1024 * 1024; // 1MB chunks - balanced for speed and memory
         let offset = 0;
         let lastProgressUpdate = 0;
         let chunkCount = 0;
@@ -2104,7 +2104,7 @@ async function handleFileChunk(data) {
     
     // Calculate chunk index from offset if not provided (backward compatibility)
     // Use 256KB chunks to match the sender's chunk size
-    const chunkSize = 256 * 1024; // 256KB chunks
+            const chunkSize = 1024 * 1024; // 1MB chunks - balanced for speed and memory
     const chunkIndex = data.chunkIndex !== undefined ? data.chunkIndex : 
                       (data.offset !== undefined ? Math.floor(data.offset / chunkSize) : 0);
     
