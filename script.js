@@ -367,6 +367,8 @@ window.showBrowserSupportError = showBrowserSupportError;
 window.handleAutoConnect = handleAutoConnect;
 window.initPeerIdEditing = initPeerIdEditing;
 window.initSocialMediaToggle = initSocialMediaToggle;
+window.setupConnectionHandlers = setupConnectionHandlers;
+window.setupPeerEventListeners = setupPeerEventListeners;
 
 // Export global state (will be updated when peer initializes)
 window.peer = peer || null;
