@@ -16,6 +16,7 @@ const urlsToCache = [
 // Active download streams registry
 const activeStreams = new Map();
 const streamControllers = new Map();
+const completedFiles = new Map(); // Store completed file data for downloads
 let keepAliveInterval = null;
 
 // Install event: cache essential files and skip waiting
@@ -72,56 +73,52 @@ async function handleStreamDownload(request) {
   const url = new URL(request.url);
   const fileId = url.pathname.split('/download/')[1];
   
-  console.log(`🌊 Service Worker: Handling stream download for fileId: ${fileId}`);
+  console.log(`🌊 Service Worker: Handling download request for fileId: ${fileId}`);
   
-  // Get stream info from active streams
+  // Check if we have the complete file ready
+  const completedFile = completedFiles.get(fileId);
+  if (completedFile) {
+    console.log(`✅ Serving complete file: ${completedFile.filename} (${completedFile.data.length} bytes)`);
+    
+    // Return the complete file as response
+    const headers = new Headers({
+      'Content-Type': completedFile.mimeType || 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${completedFile.filename}"`,
+      'Content-Length': completedFile.size.toString(),
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'X-Content-Type-Options': 'nosniff'
+    });
+
+    console.log(`📤 Serving complete file download: ${completedFile.filename}`);
+    
+    return new Response(completedFile.data, {
+      status: 200,
+      statusText: 'OK',
+      headers: headers
+    });
+  }
+  
+  // Check if stream is still in progress
   const streamInfo = activeStreams.get(fileId);
-  if (!streamInfo) {
-    console.error(`❌ Stream info not found for fileId: ${fileId}`);
-    return new Response('Stream not found', { status: 404 });
+  if (streamInfo && !streamInfo.isComplete) {
+    console.log(`⏳ File still being received: ${streamInfo.filename} (${streamInfo.bytesReceived}/${streamInfo.size} bytes)`);
+    return new Response('File still being transferred, please wait', { 
+      status: 202, // Accepted but not ready
+      statusText: 'File Transfer In Progress'
+    });
   }
   
-  // Use the pre-created stream (controller already exists!)
-  const stream = streamInfo.stream;
-  if (!stream) {
-    console.error(`❌ No pre-created stream found for fileId: ${fileId}`);
-    return new Response('Stream not found', { status: 404 });
-  }
+  // File not found
+  console.error(`❌ File not found for fileId: ${fileId}`);
+  console.log(`🔍 Available completed files:`, Array.from(completedFiles.keys()));
+  console.log(`🔍 Available active streams:`, Array.from(activeStreams.keys()));
   
-  console.log(`🎯 Using pre-created stream for: ${streamInfo.filename} (${fileId})`);
-  console.log(`📊 Active streams: ${activeStreams.size}, Controllers: ${streamControllers.size}`);
-  
-  // Debug: Check if controller exists for this fileId
-  const controller = streamControllers.get(fileId);
-  if (controller) {
-    console.log(`✅ Stream controller found for download: ${fileId}`);
-  } else {
-    console.error(`❌ No stream controller found for download: ${fileId}`);
-    console.log(`🔍 Available controllers:`, Array.from(streamControllers.keys()));
-  }
-  
-  // Return response with proper download headers for browser download manager
-  const headers = new Headers({
-    'Content-Type': streamInfo.mimeType || 'application/octet-stream',
-    'Content-Disposition': `attachment; filename="${streamInfo.filename}"`,
-    'Content-Length': streamInfo.size?.toString() || '',
-    'Accept-Ranges': 'bytes',
-
-    'Cache-Control': 'no-cache, no-store, must-revalidate',
-    'Pragma': 'no-cache',
-    'Expires': '0',
-    // Additional headers for better browser download recognition
-    'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "default-src 'none'",
-    'X-Frame-Options': 'DENY'
-  });
-
-  console.log(`📤 Returning download response for: ${streamInfo.filename} (${streamInfo.size} bytes)`);
-  
-  return new Response(stream, {
-    status: 200,
-    statusText: 'OK',
-    headers: headers
+  return new Response('File not found or expired', { 
+    status: 404,
+    statusText: 'File Not Found'
   });
 }
 
@@ -167,53 +164,18 @@ self.addEventListener('message', event => {
 function registerStream(streamInfo) {
   const { fileId, filename, mimeType, size } = streamInfo;
   
-  // Store stream info
+  // Store stream info and initialize chunk storage
   activeStreams.set(fileId, {
     filename,
     mimeType,
     size,
     startTime: Date.now(),
-    bytesReceived: 0
+    bytesReceived: 0,
+    chunks: [], // Store chunks as they arrive
+    isComplete: false
   });
   
-  // PRE-CREATE THE STREAM CONTROLLER - This is the critical fix!
-  const stream = new ReadableStream({
-    start(controller) {
-      // Store controller immediately when stream is created
-      streamControllers.set(fileId, controller);
-      console.log(`🎯 Stream controller created for: ${fileId}`);
-      
-      // CRITICAL: Send a small initial chunk immediately to trigger browser download
-      // This ensures the browser recognizes this as a valid download response
-      const initialChunk = new Uint8Array(0); // Empty chunk to start the stream
-      try {
-        controller.enqueue(initialChunk);
-        console.log(`🏁 Initial chunk enqueued to start download for: ${fileId}`);
-      } catch (error) {
-        console.error(`❌ Error enqueuing initial chunk:`, error);
-      }
-      
-      // Send stream-ready message to main thread
-      self.clients.matchAll().then(clients => {
-        clients.forEach(client => {
-          client.postMessage({
-            type: 'stream-ready',
-            fileId: fileId,
-            filename: filename
-          });
-        });
-      });
-    },
-    cancel(reason) {
-      console.log(`❌ Stream cancelled for fileId: ${fileId}`, reason);
-      cleanupStream(fileId);
-    }
-  });
-  
-  // Store the pre-created stream for the fetch handler
-  activeStreams.get(fileId).stream = stream;
-  
-  console.log(`📝 Registered stream with pre-created controller: ${filename} (${fileId})`);
+  console.log(`📝 Registered stream for: ${filename} (${fileId}) - Size: ${size} bytes`);
   
   // Send confirmation back to main thread
   self.clients.matchAll().then(clients => {
@@ -229,22 +191,18 @@ function registerStream(streamInfo) {
 
 function pipeChunkToStream(chunkData) {
   const { fileId, data, chunkIndex } = chunkData;
-  const controller = streamControllers.get(fileId);
   const streamInfo = activeStreams.get(fileId);
   
-  console.log(`🔄 Attempting to pipe chunk ${chunkIndex} for fileId: ${fileId}`);
-  console.log(`🔍 Controller exists: ${!!controller}, StreamInfo exists: ${!!streamInfo}`);
+  console.log(`🔄 Storing chunk ${chunkIndex} for fileId: ${fileId}`);
   
-  if (controller && streamInfo) {
+  if (streamInfo) {
     try {
-      // Convert ArrayBuffer to Uint8Array and enqueue
+      // Convert ArrayBuffer to Uint8Array and store it
       const uint8Array = new Uint8Array(data);
-      console.log(`📤 Enqueueing chunk ${chunkIndex}: ${uint8Array.length} bytes`);
+      console.log(`📦 Storing chunk ${chunkIndex}: ${uint8Array.length} bytes`);
       
-      controller.enqueue(uint8Array);
-      console.log(`✅ Chunk ${chunkIndex} successfully enqueued`);
-      
-      // Update stream info
+      // Store chunk in order
+      streamInfo.chunks[chunkIndex] = uint8Array;
       streamInfo.bytesReceived += uint8Array.length;
       streamInfo.lastChunkTime = Date.now();
       
@@ -252,21 +210,53 @@ function pipeChunkToStream(chunkData) {
       
       // Check if we've received all bytes
       if (streamInfo.size && streamInfo.bytesReceived >= streamInfo.size) {
-        console.log(`🎯 All bytes received for ${fileId}, auto-completing stream`);
-        // Auto-complete the stream when all bytes are received
-        setTimeout(() => completeStream(fileId), 100); // Small delay to ensure last chunk is processed
+        console.log(`🎯 All bytes received for ${fileId}, marking as complete`);
+        streamInfo.isComplete = true;
+        
+        // Combine all chunks into complete file
+        const completeFile = combineChunks(streamInfo.chunks);
+        completedFiles.set(fileId, {
+          data: completeFile,
+          filename: streamInfo.filename,
+          mimeType: streamInfo.mimeType,
+          size: streamInfo.size
+        });
+        
+        console.log(`✅ Complete file ready for download: ${streamInfo.filename} (${completeFile.length} bytes)`);
+        
+        // Auto-complete the stream
+        setTimeout(() => completeStream(fileId), 100);
       }
     } catch (error) {
-      console.error(`❌ Error piping chunk ${chunkIndex} for fileId: ${fileId}`, error);
+      console.error(`❌ Error storing chunk ${chunkIndex} for fileId: ${fileId}`, error);
       console.error(`❌ Error details:`, error.stack);
     }
   } else {
-    console.error(`❌ Cannot pipe chunk ${chunkIndex} for fileId: ${fileId}`);
-    console.log(`🔍 Available controllers:`, Array.from(streamControllers.keys()));
+    console.error(`❌ No stream info found for fileId: ${fileId}`);
     console.log(`🔍 Available streams:`, Array.from(activeStreams.keys()));
-    if (!controller) console.error(`❌ Missing controller for: ${fileId}`);
-    if (!streamInfo) console.error(`❌ Missing stream info for: ${fileId}`);
   }
+}
+
+// Helper function to combine chunks into complete file
+function combineChunks(chunks) {
+  // Calculate total size
+  let totalSize = 0;
+  for (const chunk of chunks) {
+    if (chunk) totalSize += chunk.length;
+  }
+  
+  // Create combined array
+  const combined = new Uint8Array(totalSize);
+  let offset = 0;
+  
+  for (const chunk of chunks) {
+    if (chunk) {
+      combined.set(chunk, offset);
+      offset += chunk.length;
+    }
+  }
+  
+  return combined;
 }
 
 function completeStream(fileId) {
@@ -307,16 +297,10 @@ function cancelStream(fileId) {
 }
 
 function cleanupStream(fileId) {
-  streamControllers.delete(fileId);
-  
-  // Clean up stream reference
-  const streamInfo = activeStreams.get(fileId);
-  if (streamInfo && streamInfo.stream) {
-    delete streamInfo.stream;
-  }
-  
   activeStreams.delete(fileId);
-  console.log(`🧹 Cleaned up stream for fileId: ${fileId}`);
+  completedFiles.delete(fileId);
+  streamControllers.delete(fileId); // Clean up any old references
+  console.log(`🧹 Cleaned up stream and completed file for fileId: ${fileId}`);
 }
 
 // ✅ KEEP-ALIVE MECHANISM TO PREVENT SERVICE WORKER TERMINATION
