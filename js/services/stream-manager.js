@@ -22,10 +22,41 @@ class StreamManager {
                 let registration;
                 if (!navigator.serviceWorker.controller) {
                     console.log('🔄 Registering Service Worker...');
-                    registration = await navigator.serviceWorker.register('/service-worker.js');
-                    console.log('✅ Service Worker registered');
+                    console.log('Current location:', window.location.href);
+                    console.log('Current pathname:', window.location.pathname);
+                    
+                    // Determine the correct Service Worker path based on current location
+                    const currentPath = window.location.pathname;
+                    const basePath = currentPath.endsWith('/') ? currentPath : currentPath + '/';
+                    console.log('Calculated base path:', basePath);
+                    
+                    // Try different paths for Service Worker registration
+                    const swPaths = [
+                        './service-worker.js',                           // Relative to current directory
+                        'service-worker.js',                             // Same directory
+                        basePath + 'service-worker.js',                  // Full base path
+                        window.location.origin + basePath + 'service-worker.js'  // Absolute URL
+                    ];
+                    let registered = false;
+                    
+                    for (const swPath of swPaths) {
+                        try {
+                            console.log(`Trying Service Worker path: ${swPath}`);
+                            registration = await navigator.serviceWorker.register(swPath);
+                            console.log('✅ Service Worker registered successfully at:', swPath);
+                            registered = true;
+                            break;
+                        } catch (pathError) {
+                            console.warn(`Failed to register Service Worker at ${swPath}:`, pathError.message);
+                        }
+                    }
+                    
+                    if (!registered) {
+                        throw new Error('Failed to register Service Worker at any path');
+                    }
                 } else {
                     console.log('✅ Service Worker already registered');
+                    registration = await navigator.serviceWorker.ready;
                 }
                 
                 // Wait for service worker to be ready
