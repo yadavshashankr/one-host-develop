@@ -62,6 +62,55 @@ export async function handleStreamStart(data) {
     
     // Update UI to show download starting
     window.updateFileDownloadStatus(fileId, 'downloading', 0);
+    
+    // Wait for stream to be ready before acknowledging
+    await waitForStreamReady(fileId, fileName, data);
+}
+
+// ✅ WAIT FOR STREAM TO BE READY BEFORE ACKNOWLEDGING
+async function waitForStreamReady(fileId, fileName, streamStartData) {
+    return new Promise((resolve) => {
+        // Listen for stream-ready from Service Worker
+        const messageHandler = (event) => {
+            if (event.data?.type === 'stream-ready' && event.data?.fileId === fileId) {
+                navigator.serviceWorker.removeEventListener('message', messageHandler);
+                console.log(`✅ Stream ready confirmed for: ${fileName}`);
+                
+                // Send acknowledgment back to sender
+                const conn = getConnectionFromStreamStartData(streamStartData);
+                if (conn) {
+                    conn.send({
+                        type: 'stream-ready-ack',
+                        fileId: fileId,
+                        fileName: fileName
+                    });
+                    console.log(`📤 Stream ready ACK sent for: ${fileName}`);
+                }
+                
+                resolve();
+            }
+        };
+        
+        navigator.serviceWorker.addEventListener('message', messageHandler);
+        
+        // Set a timeout in case stream-ready never comes
+        setTimeout(() => {
+            navigator.serviceWorker.removeEventListener('message', messageHandler);
+            console.warn(`⏰ Stream ready timeout for: ${fileName}, continuing anyway`);
+            resolve();
+        }, 10000); // 10 second timeout
+    });
+}
+
+// ✅ GET CONNECTION FROM STREAM START DATA
+function getConnectionFromStreamStartData(data) {
+    // The connection should be available globally
+    const connections = window.connections;
+    if (connections && connections.size > 0) {
+        // Return the first active connection (could be improved for multi-peer scenarios)
+        return Array.from(connections.values())[0];
+    }
+    return null;
 }
 
 // Handle stream data chunk
@@ -148,6 +197,28 @@ export async function sendFile(file) {
     window.showNotification(`📤 File shared: ${file.name}`, 'success');
 }
 
+// ✅ WAIT FOR STREAM READY ACKNOWLEDGMENT FROM RECEIVER
+async function waitForStreamReadyAck(fileId, fileName, conn) {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            conn.off('data', messageHandler);
+            console.warn(`⏰ Stream ready ACK timeout for: ${fileName}, proceeding anyway`);
+            resolve(); // Don't reject, just continue
+        }, 15000); // 15 second timeout
+
+        const messageHandler = (data) => {
+            if (data.type === 'stream-ready-ack' && data.fileId === fileId) {
+                clearTimeout(timeout);
+                conn.off('data', messageHandler);
+                console.log(`✅ Stream ready ACK received for: ${fileName}`);
+                resolve();
+            }
+        };
+
+        conn.on('data', messageHandler);
+    });
+}
+
 // ✅ STREAM FILE TO RECEIVER
 export async function streamFileToReceiver(file, fileId, conn) {
     try {
@@ -164,6 +235,11 @@ export async function streamFileToReceiver(file, fileId, conn) {
         });
         
         console.log(`🌊 Starting stream: ${file.name} (${totalChunks} chunks)`);
+        
+        // Wait for receiver to confirm stream is ready
+        await waitForStreamReadyAck(fileId, file.name, conn);
+        
+        console.log(`📡 Receiver ready, starting chunk transmission: ${file.name}`);
         
         // Stream file in chunks
         let offset = 0;

@@ -61,6 +61,7 @@ const MESSAGE_TYPES = {
     FILE_INFO: 'file-info',           // Send file metadata
     STREAM_REQUEST: 'stream-request', // Request file stream
     STREAM_START: 'stream-start',     // Stream starting
+    STREAM_READY_ACK: 'stream-ready-ack', // Receiver ready for chunks
     STREAM_DATA: 'stream-data',       // Stream chunk data
     STREAM_COMPLETE: 'stream-complete', // Stream finished
     STREAM_ERROR: 'stream-error'      // Stream error
@@ -279,6 +280,11 @@ function setupConnectionHandlers(conn) {
                     
                 case MESSAGE_TYPES.STREAM_START:
                     await handleStreamStart(data);
+                    break;
+                    
+                case MESSAGE_TYPES.STREAM_READY_ACK:
+                    console.log(`✅ Stream ready ACK received for: ${data.fileName}`);
+                    // This is handled by waitForStreamReadyAck in streaming-handlers.js
                     break;
                     
                 case MESSAGE_TYPES.STREAM_DATA:
