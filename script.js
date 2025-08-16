@@ -122,6 +122,7 @@ async function init() {
     
     // Initialize streaming manager
     streamManager = new StreamManager();
+    window.streamManager = streamManager;
     
     // Initialize PeerJS
     await initializePeerJS();
@@ -182,7 +183,10 @@ async function initializePeerJS() {
         });
         
         setupPeerEventListeners();
-
+        
+        // Update global window object with initialized peer
+        window.peer = peer;
+        
     } catch (error) {
         console.error('❌ Failed to initialize PeerJS:', error);
         updateConnectionStatus('error', 'Failed to initialize peer connection');
@@ -196,6 +200,10 @@ function setupPeerEventListeners() {
         elements.peerId.textContent = id;
         updateConnectionStatus('waiting', 'Ready to connect');
         generateQRCode(id);
+        
+        // Ensure global state is updated when peer is ready
+        window.peer = peer;
+        window.connections = connections;
     });
 
     peer.on('connection', (conn) => {
@@ -329,10 +337,10 @@ window.generateQRCode = generateQRCode;
 window.showBrowserSupportError = showBrowserSupportError;
 window.handleAutoConnect = handleAutoConnect;
 
-// Export global state
-window.peer = peer;
+// Export global state (will be updated when peer initializes)
+window.peer = peer || null;
 window.connections = connections;
-window.streamManager = streamManager;
+window.streamManager = streamManager || null;
 window.sentFiles = sentFiles;
 window.fileHistory = fileHistory;
 window.isPageVisible = isPageVisible;
