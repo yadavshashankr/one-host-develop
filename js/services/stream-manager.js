@@ -122,16 +122,43 @@ class StreamManager {
         
         this.activeStreams.set(fileId, streamInfo);
         
-        // Register stream with service worker
-        this.sendToServiceWorker({
-            type: 'register-stream',
-            data: { fileId, filename, mimeType, size }
-        });
+        // Register stream with service worker and wait for confirmation
+        await this.registerStreamWithServiceWorker(fileId, filename, mimeType, size);
         
         const streamURL = `/download/${fileId}`;
         console.log(`🔗 Created stream URL: ${streamURL} for file: ${filename}`);
         
         return streamURL;
+    }
+    
+    // ✅ REGISTER STREAM WITH SERVICE WORKER AND WAIT FOR CONFIRMATION
+    async registerStreamWithServiceWorker(fileId, filename, mimeType, size, timeout = 5000) {
+        return new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+                console.error(`❌ Stream registration timeout for fileId: ${fileId}`);
+                resolve(); // Don't reject, just continue - fallback behavior
+            }, timeout);
+            
+            // Listen for registration confirmation
+            const messageHandler = (event) => {
+                if (event.data?.type === 'stream-registered' && event.data?.fileId === fileId) {
+                    clearTimeout(timeoutId);
+                    navigator.serviceWorker.removeEventListener('message', messageHandler);
+                    console.log(`✅ Stream registration confirmed for: ${fileId}`);
+                    resolve();
+                }
+            };
+            
+            navigator.serviceWorker.addEventListener('message', messageHandler);
+            
+            // Send registration request
+            this.sendToServiceWorker({
+                type: 'register-stream',
+                data: { fileId, filename, mimeType, size }
+            });
+            
+            console.log(`📝 Sent stream registration request for: ${fileId}`);
+        });
     }
     
     // ✅ START DOWNLOAD WITH STREAMING URL

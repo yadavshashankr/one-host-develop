@@ -141,16 +141,23 @@ function registerStream(streamInfo) {
   });
   
   console.log(`📝 Registered stream for: ${filename} (${fileId})`);
+  
+  // Send confirmation back to main thread
+  self.clients.matchAll().then(clients => {
+    clients.forEach(client => {
+      client.postMessage({
+        type: 'stream-registered',
+        fileId: fileId,
+        filename: filename
+      });
+    });
+  });
 }
 
 function pipeChunkToStream(chunkData) {
   const { fileId, data, chunkIndex } = chunkData;
   const controller = streamControllers.get(fileId);
   const streamInfo = activeStreams.get(fileId);
-  
-  console.log(`🔍 Chunk ${chunkIndex} for fileId: ${fileId}`);
-  console.log(`Controller exists: ${!!controller}, StreamInfo exists: ${!!streamInfo}`);
-  console.log(`📊 Active streams: ${activeStreams.size}, Controllers: ${streamControllers.size}`);
   
   if (controller && streamInfo) {
     try {
@@ -168,8 +175,8 @@ function pipeChunkToStream(chunkData) {
     }
   } else {
     console.warn(`⚠️ Controller or stream info not found for fileId: ${fileId}`);
-    console.warn(`Available fileIds in activeStreams:`, Array.from(activeStreams.keys()));
-    console.warn(`Available fileIds in streamControllers:`, Array.from(streamControllers.keys()));
+    if (!controller) console.warn(`Missing controller for: ${fileId}`);
+    if (!streamInfo) console.warn(`Missing stream info for: ${fileId}`);
   }
 }
 
