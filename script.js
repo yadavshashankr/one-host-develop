@@ -157,7 +157,7 @@ function checkBrowserSupport() {
         console.warn('⚠️ Streams API not supported - may impact performance');
     }
     
-    return true;
+        return true;
 }
 
 // ✅ PEERJS INITIALIZATION
@@ -170,11 +170,8 @@ async function initializePeerJS() {
             localStorage.setItem('peerId', peerId);
         }
         
-        // Initialize PeerJS with configuration
+        // Initialize PeerJS with public server configuration
         peer = new Peer(peerId, {
-            host: 'localhost',
-            port: 9000,
-            path: '/myapp',
             debug: 2,
             config: {
                 iceServers: [
@@ -185,7 +182,7 @@ async function initializePeerJS() {
         });
         
         setupPeerEventListeners();
-        
+
     } catch (error) {
         console.error('❌ Failed to initialize PeerJS:', error);
         updateConnectionStatus('error', 'Failed to initialize peer connection');
@@ -200,7 +197,7 @@ function setupPeerEventListeners() {
         updateConnectionStatus('waiting', 'Ready to connect');
         generateQRCode(id);
     });
-    
+
     peer.on('connection', (conn) => {
         console.log('📞 Incoming connection from:', conn.peer);
         connections.set(conn.peer, conn);
@@ -208,12 +205,12 @@ function setupPeerEventListeners() {
         addRecentPeer(conn.peer);
         updateConnectionStatus('connected', `Connected to: ${conn.peer}`);
     });
-    
+
     peer.on('error', (error) => {
         console.error('❌ Peer error:', error);
         updateConnectionStatus('error', `Connection error: ${error.message}`);
     });
-    
+
     peer.on('disconnected', () => {
         console.log('🔌 Peer disconnected');
         updateConnectionStatus('disconnected', 'Disconnected from server');
@@ -227,7 +224,7 @@ function setupConnectionHandlers(conn) {
         updateConnectionStatus('connected', `Connected to: ${conn.peer}`);
         showNotification(`Connected to ${conn.peer}`, 'success');
     });
-    
+
     conn.on('data', async (data) => {
         try {
             console.log(`📨 Received data type: ${data.type}`);
@@ -258,11 +255,11 @@ function setupConnectionHandlers(conn) {
                     break;
                     
                 case MESSAGE_TYPES.KEEP_ALIVE:
-                    conn.send({
+                            conn.send({
                         type: MESSAGE_TYPES.KEEP_ALIVE_RESPONSE,
                         timestamp: Date.now(),
                         peerId: peer.id
-                    });
+                            });
                     break;
                     
                 case MESSAGE_TYPES.KEEP_ALIVE_RESPONSE:
@@ -282,14 +279,14 @@ function setupConnectionHandlers(conn) {
             console.error('❌ Error handling data:', error);
         }
     });
-    
+
     conn.on('close', () => {
         console.log('❌ Connection closed with:', conn.peer);
         connections.delete(conn.peer);
         updateConnectionStatus();
         showNotification(`Disconnected from ${conn.peer}`, 'warning');
     });
-    
+
     conn.on('error', (error) => {
         console.error(`❌ Connection error with ${conn.peer}:`, error);
         connections.delete(conn.peer);
