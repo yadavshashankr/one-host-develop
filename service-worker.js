@@ -18,19 +18,32 @@ const activeStreams = new Map();
 const streamControllers = new Map();
 let keepAliveInterval = null;
 
-// Install event: cache essential files
+// Install event: cache essential files and skip waiting
 self.addEventListener('install', event => {
+  console.log('🔧 Service Worker installing...');
+  // Skip waiting to activate immediately
+  self.skipWaiting();
+  
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => cache.addAll(urlsToCache))
   );
 });
 
-// Activate event: cleanup old caches
+// Activate event: cleanup old caches and claim clients
 self.addEventListener('activate', event => {
+  console.log('🚀 Service Worker activating...');
+  
   event.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)))
-    )
+    Promise.all([
+      // Claim all clients immediately
+      self.clients.claim(),
+      // Clean up old caches
+      caches.keys().then(keys =>
+        Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)))
+      )
+    ]).then(() => {
+      console.log('✅ Service Worker activated and claimed all clients');
+    })
   );
 });
 

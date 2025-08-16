@@ -60,25 +60,46 @@ class StreamManager {
                 }
                 
                 // Wait for service worker to be ready AND have a controller
-                await navigator.serviceWorker.ready;
+                const swRegistration = await navigator.serviceWorker.ready;
+                console.log('📋 Service Worker registration ready');
                 
-                // Ensure we have a controller (may need to wait a bit)
+                // Check if we need to refresh to get the controller
                 if (!navigator.serviceWorker.controller) {
+                    console.log('⚠️ No Service Worker controller - page may need refresh');
+                    console.log('🔄 Service Worker state:', swRegistration.active?.state);
+                    
+                    // Listen for controllerchange event
+                    let controllerChangePromise = new Promise(resolve => {
+                        navigator.serviceWorker.addEventListener('controllerchange', () => {
+                            console.log('🎯 Service Worker controller changed!');
+                            resolve();
+                        }, { once: true });
+                    });
+                    
+                    // Also listen for updatefound
+                    if (swRegistration.installing) {
+                        console.log('⏳ Service Worker installing, waiting for activation...');
+                        swRegistration.installing.addEventListener('statechange', () => {
+                            if (swRegistration.installing.state === 'activated') {
+                                console.log('✅ Service Worker activated');
+                            }
+                        });
+                    }
+                    
+                    // Wait for controller to be available (with timeout)
                     console.log('⏳ Waiting for Service Worker controller...');
-                    
-                    // Wait up to 5 seconds for controller
                     let attempts = 0;
-                    const maxAttempts = 50; // 5 seconds
+                    const maxAttempts = 100; // 10 seconds
                     
-                    await new Promise((resolve, reject) => {
+                    await new Promise((resolve) => {
                         const checkController = () => {
                             attempts++;
                             if (navigator.serviceWorker.controller) {
                                 console.log('✅ Service Worker controller acquired');
                                 resolve();
                             } else if (attempts >= maxAttempts) {
-                                console.warn('⚠️ Service Worker controller not available after 5 seconds');
-                                // Still resolve to allow fallback behavior
+                                console.warn('⚠️ Service Worker controller not available after 10 seconds');
+                                console.log('💡 Try refreshing the page to activate Service Worker');
                                 resolve();
                             } else {
                                 setTimeout(checkController, 100);
@@ -95,6 +116,15 @@ class StreamManager {
                     console.log('✅ Service Worker controller is ready and available');
                 } else {
                     console.warn('⚠️ Service Worker registered but no controller available');
+                    console.log('🔄 This usually requires a page refresh to activate the Service Worker');
+                    
+                    // Auto-refresh if this is the first time (and we're not in an iframe)
+                    if (window.top === window && !sessionStorage.getItem('sw-refresh-attempted')) {
+                        console.log('🔄 Auto-refreshing page to activate Service Worker...');
+                        sessionStorage.setItem('sw-refresh-attempted', 'true');
+                        window.location.reload();
+                        return; // Exit early since we're refreshing
+                    }
                 }
                 
                 // Listen for messages from service worker
