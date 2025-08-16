@@ -70,6 +70,8 @@ async function handleStreamDownload(request) {
       
       // Register stream controller for chunk data
       streamControllers.set(fileId, controller);
+      console.log(`✅ Stream controller registered for fileId: ${fileId}`);
+      console.log(`📊 Active streams: ${activeStreams.size}, Controllers: ${streamControllers.size}`);
       
       // Notify main thread that stream is ready
       self.clients.matchAll().then(clients => {
@@ -146,6 +148,10 @@ function pipeChunkToStream(chunkData) {
   const controller = streamControllers.get(fileId);
   const streamInfo = activeStreams.get(fileId);
   
+  console.log(`🔍 Chunk ${chunkIndex} for fileId: ${fileId}`);
+  console.log(`Controller exists: ${!!controller}, StreamInfo exists: ${!!streamInfo}`);
+  console.log(`📊 Active streams: ${activeStreams.size}, Controllers: ${streamControllers.size}`);
+  
   if (controller && streamInfo) {
     try {
       // Convert ArrayBuffer to Uint8Array and enqueue
@@ -162,6 +168,8 @@ function pipeChunkToStream(chunkData) {
     }
   } else {
     console.warn(`⚠️ Controller or stream info not found for fileId: ${fileId}`);
+    console.warn(`Available fileIds in activeStreams:`, Array.from(activeStreams.keys()));
+    console.warn(`Available fileIds in streamControllers:`, Array.from(streamControllers.keys()));
   }
 }
 
