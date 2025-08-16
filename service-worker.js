@@ -64,32 +64,15 @@ async function handleStreamDownload(request) {
     return new Response('Stream not found', { status: 404 });
   }
   
-  // Create readable stream for the download
-  const stream = new ReadableStream({
-    start(controller) {
-      console.log(`🚀 Stream started for: ${streamInfo.filename}`);
-      
-      // Register stream controller for chunk data
-      streamControllers.set(fileId, controller);
-      console.log(`✅ Stream controller registered for fileId: ${fileId}`);
-      console.log(`📊 Active streams: ${activeStreams.size}, Controllers: ${streamControllers.size}`);
-      
-      // Notify main thread that stream is ready
-      self.clients.matchAll().then(clients => {
-        clients.forEach(client => {
-          client.postMessage({
-            type: 'stream-ready',
-            fileId: fileId
-          });
-        });
-      });
-    },
-    
-    cancel(reason) {
-      console.log(`❌ Stream cancelled for fileId: ${fileId}`, reason);
-      cleanupStream(fileId);
-    }
-  });
+  // Use the pre-created stream (controller already exists!)
+  const stream = streamInfo.stream;
+  if (!stream) {
+    console.error(`❌ No pre-created stream found for fileId: ${fileId}`);
+    return new Response('Stream not found', { status: 404 });
+  }
+  
+  console.log(`🎯 Using pre-created stream for: ${streamInfo.filename} (${fileId})`);
+  console.log(`📊 Active streams: ${activeStreams.size}, Controllers: ${streamControllers.size}`);
   
   // Return response with proper download headers
   return new Response(stream, {
@@ -145,6 +128,7 @@ self.addEventListener('message', event => {
 function registerStream(streamInfo) {
   const { fileId, filename, mimeType, size } = streamInfo;
   
+  // Store stream info
   activeStreams.set(fileId, {
     filename,
     mimeType,
@@ -153,7 +137,34 @@ function registerStream(streamInfo) {
     bytesReceived: 0
   });
   
-  console.log(`📝 Registered stream for: ${filename} (${fileId})`);
+  // PRE-CREATE THE STREAM CONTROLLER - This is the critical fix!
+  const stream = new ReadableStream({
+    start(controller) {
+      // Store controller immediately when stream is created
+      streamControllers.set(fileId, controller);
+      console.log(`🎯 Stream controller created for: ${fileId}`);
+      
+      // Send stream-ready message to main thread
+      self.clients.matchAll().then(clients => {
+        clients.forEach(client => {
+          client.postMessage({
+            type: 'stream-ready',
+            fileId: fileId,
+            filename: filename
+          });
+        });
+      });
+    },
+    cancel(reason) {
+      console.log(`❌ Stream cancelled for fileId: ${fileId}`, reason);
+      cleanupStream(fileId);
+    }
+  });
+  
+  // Store the pre-created stream for the fetch handler
+  activeStreams.get(fileId).stream = stream;
+  
+  console.log(`📝 Registered stream with pre-created controller: ${filename} (${fileId})`);
   
   // Send confirmation back to main thread
   self.clients.matchAll().then(clients => {
@@ -239,6 +250,13 @@ function cancelStream(fileId) {
 
 function cleanupStream(fileId) {
   streamControllers.delete(fileId);
+  
+  // Clean up stream reference
+  const streamInfo = activeStreams.get(fileId);
+  if (streamInfo && streamInfo.stream) {
+    delete streamInfo.stream;
+  }
+  
   activeStreams.delete(fileId);
   console.log(`🧹 Cleaned up stream for fileId: ${fileId}`);
 }
