@@ -176,18 +176,19 @@ class StreamManager {
         
         const downloadURL = `/download/${fileId}`;
         
-        // Create download link and trigger download
+        // Create download link and trigger immediate download
         const link = document.createElement('a');
         link.href = downloadURL;
         link.download = filename;
         link.style.display = 'none';
         
+        // Add to DOM and trigger download
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         
         streamInfo.isActive = true;
-        console.log(`🚀 Started download for: ${filename}`);
+        console.log(`🚀 Started download for: ${filename} (URL: ${downloadURL})`);
         
         return downloadURL;
     }

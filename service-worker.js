@@ -40,6 +40,7 @@ self.addEventListener('fetch', event => {
   
   // Handle streaming downloads
   if (url.pathname.startsWith('/download/')) {
+    console.log(`🌊 Service Worker: Intercepted download request for: ${url.pathname}`);
     event.respondWith(handleStreamDownload(event.request));
     return;
   }
@@ -74,19 +75,28 @@ async function handleStreamDownload(request) {
   console.log(`🎯 Using pre-created stream for: ${streamInfo.filename} (${fileId})`);
   console.log(`📊 Active streams: ${activeStreams.size}, Controllers: ${streamControllers.size}`);
   
-  // Return response with proper download headers
+  // Return response with proper download headers for browser download manager
+  const headers = new Headers({
+    'Content-Type': streamInfo.mimeType || 'application/octet-stream',
+    'Content-Disposition': `attachment; filename="${streamInfo.filename}"`,
+    'Content-Length': streamInfo.size?.toString() || '',
+    'Accept-Ranges': 'bytes',
+
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+    // Additional headers for better browser download recognition
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'",
+    'X-Frame-Options': 'DENY'
+  });
+
+  console.log(`📤 Returning download response for: ${streamInfo.filename} (${streamInfo.size} bytes)`);
+  
   return new Response(stream, {
     status: 200,
     statusText: 'OK',
-    headers: {
-      'Content-Type': streamInfo.mimeType || 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="${streamInfo.filename}"`,
-      'Content-Length': streamInfo.size?.toString() || '',
-      'Accept-Ranges': 'bytes',
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    }
+    headers: headers
   });
 }
 
@@ -143,6 +153,16 @@ function registerStream(streamInfo) {
       // Store controller immediately when stream is created
       streamControllers.set(fileId, controller);
       console.log(`🎯 Stream controller created for: ${fileId}`);
+      
+      // CRITICAL: Send a small initial chunk immediately to trigger browser download
+      // This ensures the browser recognizes this as a valid download response
+      const initialChunk = new Uint8Array(0); // Empty chunk to start the stream
+      try {
+        controller.enqueue(initialChunk);
+        console.log(`🏁 Initial chunk enqueued to start download for: ${fileId}`);
+      } catch (error) {
+        console.error(`❌ Error enqueuing initial chunk:`, error);
+      }
       
       // Send stream-ready message to main thread
       self.clients.matchAll().then(clients => {
