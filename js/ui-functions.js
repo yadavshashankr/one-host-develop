@@ -283,24 +283,36 @@ export function connectToPeer(remotePeerId) {
     window.updateConnectionStatus('connecting', 'Connecting...');
     
     const conn = window.peer.connect(remotePeerId, { reliable: true });
-    window.connections.set(remotePeerId, conn);
     
+    // Set up connection handlers first, before adding to map
     window.setupConnectionHandlers(conn);
+    
+    // Add to connections map
+    window.connections.set(remotePeerId, conn);
     window.addRecentPeer(remotePeerId);
     
+    // Set up a timeout for connection attempts
+    const connectionTimeout = setTimeout(() => {
+        if (!conn.open) {
+            console.log('Connection timeout for peer:', remotePeerId);
+            window.connections.delete(remotePeerId);
+            window.updateConnectionStatus('', 'Connection timeout');
+            window.showNotification('Connection timeout', 'error');
+        }
+    }, 10000); // 10 second timeout
+    
+    // Clear timeout when connection opens
     conn.on('open', () => {
-        window.elements.remotePeerId.value = '';
-        window.updateConnectionStatus('connected', `Connected to peer(s): ${window.connections.size}`);
-        window.elements.fileTransferSection.classList.remove('hidden');
-        window.showNotification(`Connected to ${remotePeerId}`, 'success');
+        clearTimeout(connectionTimeout);
     });
     
-    conn.on('error', (error) => {
-        console.error('Connection error:', error);
-        window.connections.delete(remotePeerId);
-        window.updateConnectionStatus('', 'Connection failed');
-        window.showNotification('Connection failed', 'error');
+    // Clear timeout on error
+    conn.on('error', () => {
+        clearTimeout(connectionTimeout);
     });
+    
+    // Clear the input field immediately after connection attempt
+    window.elements.remotePeerId.value = '';
 }
 
 export function generatePeerId() {

@@ -247,9 +247,16 @@ function setupPeerEventListeners() {
 function setupConnectionHandlers(conn) {
     conn.on('open', () => {
         console.log('✅ Connection opened with:', conn.peer);
+        // Ensure the connection is in the map
+        if (!connections.has(conn.peer)) {
+            connections.set(conn.peer, conn);
+        }
         updateConnectionStatus('connected', `Connected to peer(s): ${connections.size}`);
         elements.fileTransferSection.classList.remove('hidden');
         showNotification(`Connected to ${conn.peer}`, 'success');
+        
+        // Update global state
+        window.connections = connections;
     });
 
     conn.on('data', async (data) => {
