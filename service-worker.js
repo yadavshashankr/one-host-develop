@@ -124,6 +124,10 @@ self.addEventListener('message', event => {
       stopKeepAliveIfNoActiveStreams();
       break;
       
+    case 'start-background-fetch':
+      startBackgroundFetch(data);
+      break;
+      
     case 'keep-alive':
       // Respond to keep-alive ping from main thread
       break;
@@ -304,5 +308,106 @@ function stopKeepAliveIfNoActiveStreams() {
     console.log('⏹️ Keep-alive stopped - no active streams');
   }
 }
+
+// ✅ BACKGROUND FETCH API - Android Studio-like Downloads
+async function startBackgroundFetch(data) {
+  const { fileId, filename, mimeType, size } = data;
+  
+  console.log(`🚀 Starting Background Fetch for: ${filename} (${size} bytes)`);
+  
+  try {
+    // Start background fetch with native Chrome download manager
+    const bgFetch = await self.registration.backgroundFetch.fetch(fileId, `/download/${fileId}`, {
+      title: `Downloading ${filename}`,
+      icons: [
+        {
+          src: '/assets/tablogo.png',
+          sizes: '64x64',
+          type: 'image/png'
+        }
+      ],
+      downloadTotal: size,
+      // This creates the Android Studio-like download behavior!
+    });
+    
+    console.log(`✅ Background Fetch started for: ${filename}`);
+    
+    // Notify main thread
+    self.clients.matchAll().then(clients => {
+      clients.forEach(client => {
+        client.postMessage({
+          type: 'background-fetch-started',
+          fileId: fileId,
+          filename: filename
+        });
+      });
+    });
+    
+  } catch (error) {
+    console.error(`❌ Background Fetch failed for ${filename}:`, error);
+    
+    // Fallback to regular stream download
+    console.log(`📋 Falling back to regular stream download for: ${filename}`);
+    self.clients.matchAll().then(clients => {
+      clients.forEach(client => {
+        client.postMessage({
+          type: 'background-fetch-fallback',
+          fileId: fileId,
+          filename: filename
+        });
+      });
+    });
+  }
+}
+
+// ✅ BACKGROUND FETCH EVENT HANDLERS
+self.addEventListener('backgroundfetchsuccess', event => {
+  console.log(`✅ Background Fetch completed successfully:`, event.registration.id);
+  
+  // Notify main thread of completion
+  self.clients.matchAll().then(clients => {
+    clients.forEach(client => {
+      client.postMessage({
+        type: 'background-fetch-success',
+        fileId: event.registration.id
+      });
+    });
+  });
+});
+
+self.addEventListener('backgroundfetchfail', event => {
+  console.log(`❌ Background Fetch failed:`, event.registration.id);
+  
+  // Notify main thread of failure
+  self.clients.matchAll().then(clients => {
+    clients.forEach(client => {
+      client.postMessage({
+        type: 'background-fetch-fail',
+        fileId: event.registration.id
+      });
+    });
+  });
+});
+
+self.addEventListener('backgroundfetchabort', event => {
+  console.log(`⏹️ Background Fetch aborted:`, event.registration.id);
+  
+  // Notify main thread of abort
+  self.clients.matchAll().then(clients => {
+    clients.forEach(client => {
+      client.postMessage({
+        type: 'background-fetch-abort',
+        fileId: event.registration.id
+      });
+    });
+  });
+});
+
+self.addEventListener('backgroundfetchclick', event => {
+  console.log(`👆 Background Fetch clicked:`, event.registration.id);
+  
+  // Open the app when user clicks on the download notification
+  self.clients.openWindow('/');
+});
 
 console.log('🌊 One-Host Streaming Service Worker loaded');

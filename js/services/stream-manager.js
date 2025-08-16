@@ -161,7 +161,7 @@ class StreamManager {
         });
     }
     
-    // ✅ START DOWNLOAD WITH STREAMING URL
+    // ✅ START DOWNLOAD WITH BACKGROUND FETCH (Android Studio-like behavior)
     async startDownload(fileId, filename) {
         // Wait for service worker to be ready
         const isReady = await this.waitForServiceWorker();
@@ -174,23 +174,70 @@ class StreamManager {
             throw new Error(`Stream not found for fileId: ${fileId}`);
         }
         
+        // Check if Background Fetch is supported
+        if ('serviceWorker' in navigator && 'backgroundFetch' in ServiceWorkerRegistration.prototype) {
+            console.log(`🎯 Using Background Fetch for Android Studio-like download: ${filename}`);
+            
+            // Start Background Fetch for native Chrome download manager
+            this.sendToServiceWorker({
+                type: 'start-background-fetch',
+                data: {
+                    fileId,
+                    filename,
+                    mimeType: streamInfo.mimeType,
+                    size: streamInfo.size
+                }
+            });
+            
+            streamInfo.isActive = true;
+            streamInfo.usingBackgroundFetch = true;
+            console.log(`🚀 Background Fetch initiated for: ${filename}`);
+            
+            return `/download/${fileId}`;
+            
+        } else {
+            console.log(`📋 Background Fetch not supported, falling back to regular download`);
+            
+            // Fallback to regular download
+            const downloadURL = `/download/${fileId}`;
+            
+            const link = document.createElement('a');
+            link.href = downloadURL;
+            link.download = filename;
+            link.style.display = 'none';
+            
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            streamInfo.isActive = true;
+            streamInfo.usingBackgroundFetch = false;
+            console.log(`🚀 Regular download started for: ${filename} (URL: ${downloadURL})`);
+            
+            return downloadURL;
+        }
+    }
+    
+    // ✅ FALLBACK REGULAR DOWNLOAD METHOD
+    startRegularDownload(fileId, filename) {
         const downloadURL = `/download/${fileId}`;
         
-        // Create download link and trigger immediate download
         const link = document.createElement('a');
         link.href = downloadURL;
         link.download = filename;
         link.style.display = 'none';
         
-        // Add to DOM and trigger download
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         
-        streamInfo.isActive = true;
-        console.log(`🚀 Started download for: ${filename} (URL: ${downloadURL})`);
+        const streamInfo = this.activeStreams.get(fileId);
+        if (streamInfo) {
+            streamInfo.isActive = true;
+            streamInfo.usingBackgroundFetch = false;
+        }
         
-        return downloadURL;
+        console.log(`🚀 Fallback regular download started for: ${filename}`);
     }
     
     // ✅ PIPE CHUNK DATA TO STREAM
@@ -318,6 +365,53 @@ class StreamManager {
                     type: 'keep-alive',
                     data: { timestamp: Date.now() }
                 });
+                break;
+                
+            case 'background-fetch-started':
+                console.log(`🎯 Background Fetch started for: ${event.data.filename}`);
+                // Update UI to show native download has started
+                if (window.updateFileDownloadStatus) {
+                    window.updateFileDownloadStatus(event.data.fileId, 'downloading-native', 0);
+                }
+                break;
+                
+            case 'background-fetch-success':
+                console.log(`✅ Background Fetch completed for: ${fileId}`);
+                const completedStream = this.activeStreams.get(fileId);
+                if (completedStream) {
+                    if (window.updateFileDownloadStatus) {
+                        window.updateFileDownloadStatus(fileId, 'completed', 100);
+                    }
+                    if (window.showNotification) {
+                        window.showNotification(`✅ Download completed: ${completedStream.filename}`, 'success');
+                    }
+                }
+                break;
+                
+            case 'background-fetch-fail':
+                console.log(`❌ Background Fetch failed for: ${fileId}`);
+                if (window.updateFileDownloadStatus) {
+                    window.updateFileDownloadStatus(fileId, 'error', 0);
+                }
+                if (window.showNotification) {
+                    window.showNotification(`❌ Download failed: ${fileId}`, 'error');
+                }
+                break;
+                
+            case 'background-fetch-abort':
+                console.log(`⏹️ Background Fetch aborted for: ${fileId}`);
+                if (window.updateFileDownloadStatus) {
+                    window.updateFileDownloadStatus(fileId, 'cancelled', 0);
+                }
+                break;
+                
+            case 'background-fetch-fallback':
+                console.log(`📋 Falling back to regular download for: ${event.data.filename}`);
+                // Trigger regular download as fallback
+                const fallbackStream = this.activeStreams.get(event.data.fileId);
+                if (fallbackStream) {
+                    this.startRegularDownload(event.data.fileId, event.data.filename);
+                }
                 break;
                 
             default:

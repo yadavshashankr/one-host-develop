@@ -253,11 +253,18 @@ export function updateFileDownloadStatus(fileId, status, progress) {
             listItem.classList.add('downloading');
             break;
             
+        case 'downloading-native':
+            downloadBtn.innerHTML = '🎯 Chrome Download';
+            downloadBtn.disabled = true;
+            downloadBtn.title = 'Download started in Chrome Download Manager';
+            listItem.classList.add('downloading-native');
+            break;
+            
         case 'completed':
             downloadBtn.innerHTML = '<span class="material-icons">check_circle</span>';
             downloadBtn.disabled = false;
             downloadBtn.title = 'Download completed';
-            listItem.classList.remove('downloading');
+            listItem.classList.remove('downloading', 'downloading-native');
             listItem.classList.add('completed');
             break;
             
@@ -265,8 +272,16 @@ export function updateFileDownloadStatus(fileId, status, progress) {
             downloadBtn.innerHTML = '<span class="material-icons">error</span>';
             downloadBtn.disabled = false;
             downloadBtn.title = 'Download failed - click to retry';
-            listItem.classList.remove('downloading');
+            listItem.classList.remove('downloading', 'downloading-native');
             listItem.classList.add('error');
+            break;
+            
+        case 'cancelled':
+            downloadBtn.innerHTML = '<span class="material-icons">cancel</span>';
+            downloadBtn.disabled = false;
+            downloadBtn.title = 'Download cancelled - click to retry';
+            listItem.classList.remove('downloading', 'downloading-native');
+            listItem.classList.add('cancelled');
             break;
     }
 }
