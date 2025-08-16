@@ -331,7 +331,13 @@ export function connectToPeer(remotePeerId) {
 }
 
 export function generatePeerId() {
-    return Math.random().toString(36).substr(2, 9);
+    // Generate a more unique peer ID with timestamp and random components
+    const timestamp = Date.now().toString(36);
+    const randomPart = Math.random().toString(36).substr(2, 8);
+    const extraRandom = Math.random().toString(36).substr(2, 4);
+    
+    // Combine for a longer, more unique ID
+    return `${randomPart}${timestamp}${extraRandom}`.toLowerCase();
 }
 
 export function formatFileSize(bytes) {

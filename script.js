@@ -180,9 +180,9 @@ function checkBrowserSupport() {
         console.warn('⚠️ Streams API not supported - may impact performance');
     }
     
-        return true;
-}
-
+            return true;
+        }
+        
 // ✅ PEERJS INITIALIZATION
 async function initializePeerJS() {
     try {
@@ -191,6 +191,9 @@ async function initializePeerJS() {
         if (!peerId) {
             peerId = generatePeerId();
             localStorage.setItem('peerId', peerId);
+            console.log(`🆔 Generated new Peer ID: ${peerId}`);
+    } else {
+            console.log(`🆔 Using stored Peer ID: ${peerId}`);
         }
         
         // Initialize PeerJS with public server configuration
@@ -240,6 +243,26 @@ function setupPeerEventListeners() {
 
     peer.on('error', (error) => {
         console.error('❌ Peer error:', error);
+        
+        // Handle ID taken error by generating a new ID
+        if (error.type === 'unavailable-id' || error.message?.includes('is taken')) {
+            console.log('🔄 Peer ID is taken, generating a new one...');
+            
+            // Clear the stored peer ID and generate a new one
+            localStorage.removeItem('peerId');
+            const newPeerId = generatePeerId();
+            localStorage.setItem('peerId', newPeerId);
+            
+            console.log(`🆔 New Peer ID generated: ${newPeerId}`);
+            
+            // Reinitialize PeerJS with the new ID
+        setTimeout(() => {
+                initializePeerJS();
+            }, 1000);
+            
+            return;
+        }
+        
         updateConnectionStatus('error', `Connection error: ${error.message}`);
     });
 
