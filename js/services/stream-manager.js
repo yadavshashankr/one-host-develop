@@ -59,9 +59,43 @@ class StreamManager {
                     registration = await navigator.serviceWorker.ready;
                 }
                 
-                // Wait for service worker to be ready
+                // Wait for service worker to be ready AND have a controller
                 await navigator.serviceWorker.ready;
-                this.serviceWorkerReady = true;
+                
+                // Ensure we have a controller (may need to wait a bit)
+                if (!navigator.serviceWorker.controller) {
+                    console.log('⏳ Waiting for Service Worker controller...');
+                    
+                    // Wait up to 5 seconds for controller
+                    let attempts = 0;
+                    const maxAttempts = 50; // 5 seconds
+                    
+                    await new Promise((resolve, reject) => {
+                        const checkController = () => {
+                            attempts++;
+                            if (navigator.serviceWorker.controller) {
+                                console.log('✅ Service Worker controller acquired');
+                                resolve();
+                            } else if (attempts >= maxAttempts) {
+                                console.warn('⚠️ Service Worker controller not available after 5 seconds');
+                                // Still resolve to allow fallback behavior
+                                resolve();
+                            } else {
+                                setTimeout(checkController, 100);
+                            }
+                        };
+                        checkController();
+                    });
+                }
+                
+                // Only mark as ready if we have a controller
+                this.serviceWorkerReady = !!navigator.serviceWorker.controller;
+                
+                if (this.serviceWorkerReady) {
+                    console.log('✅ Service Worker controller is ready and available');
+                } else {
+                    console.warn('⚠️ Service Worker registered but no controller available');
+                }
                 
                 // Listen for messages from service worker
                 navigator.serviceWorker.addEventListener('message', (event) => {
@@ -152,7 +186,7 @@ class StreamManager {
             navigator.serviceWorker.addEventListener('message', messageHandler);
             
             // Send registration request
-            this.sendToServiceWorker({
+            await this.sendToServiceWorker({
                 type: 'register-stream',
                 data: { fileId, filename, mimeType, size }
             });
@@ -179,7 +213,7 @@ class StreamManager {
             console.log(`🎯 Using Background Fetch for Android Studio-like download: ${filename}`);
             
             // Start Background Fetch for native Chrome download manager
-            this.sendToServiceWorker({
+            await this.sendToServiceWorker({
                 type: 'start-background-fetch',
                 data: {
                     fileId,
@@ -249,10 +283,15 @@ class StreamManager {
         }
         
         // Send chunk to service worker
-        this.sendToServiceWorker({
+        const sent = await this.sendToServiceWorker({
             type: 'stream-chunk',
             data: { fileId, data: chunkData, chunkIndex }
         });
+        
+        if (!sent) {
+            console.error('❌ Failed to send chunk to Service Worker');
+            return false;
+        }
         
         // Update local stream info
         streamInfo.bytesReceived += chunkData.byteLength;
@@ -286,7 +325,7 @@ class StreamManager {
         }
         
         // Notify service worker to close stream
-        this.sendToServiceWorker({
+        await this.sendToServiceWorker({
             type: 'complete-stream',
             data: { fileId }
         });
@@ -420,11 +459,19 @@ class StreamManager {
     }
     
     // ✅ SEND MESSAGE TO SERVICE WORKER
-    sendToServiceWorker(message) {
+    async sendToServiceWorker(message) {
+        // Ensure Service Worker is ready before sending
+        if (!this.serviceWorkerReady) {
+            console.log('⏳ Service Worker not ready, waiting...');
+            await this.waitForServiceWorker();
+        }
+        
         if (this.serviceWorkerReady && navigator.serviceWorker.controller) {
             navigator.serviceWorker.controller.postMessage(message);
+            return true;
         } else {
-            console.warn('⚠️ Service Worker not ready, cannot send message:', message);
+            console.error('❌ Service Worker still not ready after waiting, cannot send message:', message);
+            return false;
         }
     }
     
