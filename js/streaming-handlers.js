@@ -127,12 +127,14 @@ export async function handleStreamComplete(data) {
     
     console.log(`✅ Stream completed: ${fileName}`);
     
-    // Complete the stream
+    // Complete the stream (this will now trigger the pending download)
     await window.streamManager.completeStream(fileId);
     
-    // Update UI
+    // Update UI to show completion
     window.updateFileDownloadStatus(fileId, 'completed', 100);
     window.showNotification(`✅ Downloaded: ${fileName}`, 'success');
+    
+    console.log(`🎉 Download should now be triggered for: ${fileName}`);
 }
 
 // Handle stream error
@@ -296,7 +298,7 @@ export async function requestFileDownload(fileInfo) {
     try {
         console.log(`🎯 Requesting download: ${fileInfo.name}`);
         
-        // Create streaming download URL
+        // Create streaming download URL but DON'T start download yet
         const streamURL = window.streamManager.createDownloadURL(
             fileInfo.id,
             fileInfo.name,
@@ -308,8 +310,17 @@ export async function requestFileDownload(fileInfo) {
             throw new Error('Unable to create streaming download URL');
         }
         
-        // Start the download
-        await window.streamManager.startDownload(fileInfo.id, fileInfo.name);
+        // Store download info for later trigger when chunks complete
+        window.streamManager.setPendingDownload(fileInfo.id, {
+            fileName: fileInfo.name,
+            downloadURL: streamURL,
+            startTime: Date.now()
+        });
+        
+        console.log(`⏳ Download prepared, waiting for chunks: ${fileInfo.name}`);
+        
+        // Update UI to show waiting for chunks
+        window.updateFileDownloadStatus(fileInfo.id, 'downloading', 0);
         
         // Find connection to sender
         const conn = window.connections.get(fileInfo.sharedBy);

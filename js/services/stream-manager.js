@@ -9,6 +9,7 @@ class StreamManager {
     constructor() {
         this.activeStreams = new Map();
         this.streamProgressCallbacks = new Map();
+        this.pendingDownloads = new Map(); // Store downloads waiting for chunks
         this.serviceWorkerReady = false;
         
         this.init();
@@ -370,6 +371,9 @@ class StreamManager {
             });
         }
         
+        // 🎯 CRITICAL: Now trigger the pending download since all chunks are ready
+        await this.triggerPendingDownload(fileId);
+        
         // Cleanup
         this.cleanupStream(fileId);
     }
@@ -497,10 +501,42 @@ class StreamManager {
         }
     }
     
+    // ✅ SET PENDING DOWNLOAD (wait for chunks before triggering)
+    setPendingDownload(fileId, downloadInfo) {
+        this.pendingDownloads.set(fileId, downloadInfo);
+        console.log(`📋 Pending download registered: ${downloadInfo.fileName}`);
+    }
+    
+    // ✅ TRIGGER DOWNLOAD WHEN CHUNKS COMPLETE
+    async triggerPendingDownload(fileId) {
+        const downloadInfo = this.pendingDownloads.get(fileId);
+        if (!downloadInfo) {
+            console.warn(`⚠️ No pending download found for fileId: ${fileId}`);
+            return;
+        }
+        
+        console.log(`🚀 Triggering download now that chunks are complete: ${downloadInfo.fileName}`);
+        
+        try {
+            // Now that chunks are ready, start the actual download
+            await this.startDownload(fileId, downloadInfo.fileName);
+            
+            // Remove from pending downloads
+            this.pendingDownloads.delete(fileId);
+            
+            console.log(`✅ Download triggered successfully: ${downloadInfo.fileName}`);
+            
+        } catch (error) {
+            console.error(`❌ Failed to trigger download for ${downloadInfo.fileName}:`, error);
+            this.pendingDownloads.delete(fileId);
+        }
+    }
+    
     // ✅ CLEANUP STREAM
     cleanupStream(fileId) {
         this.activeStreams.delete(fileId);
         this.streamProgressCallbacks.delete(fileId);
+        this.pendingDownloads.delete(fileId); // Also cleanup pending downloads
         console.log(`🧹 Cleaned up stream: ${fileId}`);
     }
     
