@@ -18,8 +18,18 @@ class StreamManager {
         // Check if service worker is available
         if ('serviceWorker' in navigator) {
             try {
+                // Register service worker if not already registered
+                let registration;
+                if (!navigator.serviceWorker.controller) {
+                    console.log('🔄 Registering Service Worker...');
+                    registration = await navigator.serviceWorker.register('/service-worker.js');
+                    console.log('✅ Service Worker registered');
+                } else {
+                    console.log('✅ Service Worker already registered');
+                }
+                
                 // Wait for service worker to be ready
-                const registration = await navigator.serviceWorker.ready;
+                await navigator.serviceWorker.ready;
                 this.serviceWorkerReady = true;
                 
                 // Listen for messages from service worker
@@ -29,7 +39,7 @@ class StreamManager {
                 
                 console.log('🌊 StreamManager initialized with Service Worker support');
             } catch (error) {
-                console.error('❌ Service Worker not available:', error);
+                console.error('❌ Service Worker initialization failed:', error);
                 this.serviceWorkerReady = false;
             }
         } else {
@@ -38,10 +48,34 @@ class StreamManager {
         }
     }
     
+    // ✅ WAIT FOR SERVICE WORKER TO BE READY
+    async waitForServiceWorker(timeout = 10000) {
+        if (this.serviceWorkerReady) {
+            return true;
+        }
+        
+        console.log('⏳ Waiting for Service Worker to be ready...');
+        
+        const startTime = Date.now();
+        while (!this.serviceWorkerReady && (Date.now() - startTime) < timeout) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        if (this.serviceWorkerReady) {
+            console.log('✅ Service Worker is now ready');
+            return true;
+        } else {
+            console.error('❌ Service Worker timeout after', timeout, 'ms');
+            return false;
+        }
+    }
+    
     // ✅ CREATE STREAMING DOWNLOAD URL
-    createDownloadURL(fileId, filename, mimeType, size) {
-        if (!this.serviceWorkerReady) {
-            console.warn('⚠️ Service Worker not ready, cannot create stream URL');
+    async createDownloadURL(fileId, filename, mimeType, size) {
+        // Wait for service worker to be ready
+        const isReady = await this.waitForServiceWorker();
+        if (!isReady) {
+            console.error('❌ Service Worker not ready, cannot create stream URL');
             return null;
         }
         
@@ -71,6 +105,12 @@ class StreamManager {
     
     // ✅ START DOWNLOAD WITH STREAMING URL
     async startDownload(fileId, filename) {
+        // Wait for service worker to be ready
+        const isReady = await this.waitForServiceWorker();
+        if (!isReady) {
+            throw new Error('Service Worker not ready for download');
+        }
+        
         const streamInfo = this.activeStreams.get(fileId);
         if (!streamInfo) {
             throw new Error(`Stream not found for fileId: ${fileId}`);

@@ -130,9 +130,14 @@ async function init() {
     
     console.log('🌊 Initializing One-Host Streaming...');
     
-    // Initialize streaming manager
+    // Initialize streaming manager and wait for it to be ready
     streamManager = new StreamManager();
     window.streamManager = streamManager;
+    
+    // Wait for stream manager to initialize Service Worker
+    console.log('⏳ Waiting for StreamManager to initialize...');
+    await streamManager.waitForServiceWorker();
+    console.log('✅ StreamManager ready');
     
     // Initialize PeerJS
     await initializePeerJS();
