@@ -167,7 +167,7 @@ class StreamManager {
     
     // ✅ REGISTER STREAM WITH SERVICE WORKER AND WAIT FOR CONFIRMATION
     async registerStreamWithServiceWorker(fileId, filename, mimeType, size, timeout = 5000) {
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             const timeoutId = setTimeout(() => {
                 console.error(`❌ Stream registration timeout for fileId: ${fileId}`);
                 resolve(); // Don't reject, just continue - fallback behavior
