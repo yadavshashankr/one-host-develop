@@ -280,6 +280,7 @@ export function connectToPeer(remotePeerId) {
     }
     
     console.log('🔗 Connecting to peer:', remotePeerId);
+    window.updateConnectionStatus('connecting', 'Connecting...');
     
     const conn = window.peer.connect(remotePeerId, { reliable: true });
     window.connections.set(remotePeerId, conn);
@@ -287,11 +288,18 @@ export function connectToPeer(remotePeerId) {
     window.setupConnectionHandlers(conn);
     window.addRecentPeer(remotePeerId);
     
-    window.updateConnectionStatus('connecting', `Connecting to ${remotePeerId}...`);
-    
     conn.on('open', () => {
         window.elements.remotePeerId.value = '';
+        window.updateConnectionStatus('connected', `Connected to peer(s): ${window.connections.size}`);
+        window.elements.fileTransferSection.classList.remove('hidden');
         window.showNotification(`Connected to ${remotePeerId}`, 'success');
+    });
+    
+    conn.on('error', (error) => {
+        console.error('Connection error:', error);
+        window.connections.delete(remotePeerId);
+        window.updateConnectionStatus('', 'Connection failed');
+        window.showNotification('Connection failed', 'error');
     });
 }
 
@@ -324,26 +332,24 @@ export function getFileIcon(mimeType) {
 }
 
 export function updateConnectionStatus(status = '', message = '') {
-    const statusColors = {
-        'waiting': '#ffa726',
-        'connecting': '#42a5f5',
-        'connected': '#66bb6a',
-        'error': '#ef5350',
-        'disconnected': '#bdbdbd'
-    };
+    window.elements.statusDot.className = 'status-dot ' + (status || '');
     
-    if (status) {
-        window.elements.statusDot.style.backgroundColor = statusColors[status] || '#bdbdbd';
-        window.elements.statusText.textContent = message;
+    if (message) {
+        window.elements.statusText.textContent = message.charAt(0).toUpperCase() + message.slice(1);
     } else {
         // Auto-detect status based on connections
-        if (window.connections.size > 0) {
-            window.elements.statusDot.style.backgroundColor = statusColors.connected;
+        if (window.connections && window.connections.size > 0) {
             window.elements.statusText.textContent = `Connected to ${window.connections.size} peer(s)`;
         } else {
-            window.elements.statusDot.style.backgroundColor = statusColors.waiting;
             window.elements.statusText.textContent = 'Ready to connect';
         }
+    }
+    
+    // Update title to show number of connections
+    if (window.connections && window.connections.size > 0) {
+        document.title = `(${window.connections.size}) One-Host`;
+    } else {
+        document.title = 'One-Host';
     }
 }
 

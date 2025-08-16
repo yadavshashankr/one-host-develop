@@ -39,7 +39,9 @@ import {
     updateRecentPeersList,
     generateQRCode,
     showBrowserSupportError,
-    handleAutoConnect
+    handleAutoConnect,
+    initPeerIdEditing,
+    initSocialMediaToggle
 } from './js/utility-functions.js';
 
 // ✅ CONSTANTS & CONFIGURATION
@@ -87,7 +89,15 @@ const elements = {
     sentFilesList: document.getElementById('sent-files-list'),
     receivedFilesList: document.getElementById('received-files-list'),
     recentPeers: document.getElementById('recent-peers'),
-    recentPeersList: document.getElementById('recent-peers-list')
+    recentPeersList: document.getElementById('recent-peers-list'),
+    // Add missing elements for peer ID editing
+    peerIdEdit: document.getElementById('peer-id-edit'),
+    editIdButton: document.getElementById('edit-id'),
+    saveIdButton: document.getElementById('save-id'),
+    cancelEditButton: document.getElementById('cancel-edit'),
+    // Social media elements
+    socialToggle: document.getElementById('social-toggle'),
+    socialIcons: document.getElementById('social-icons')
 };
 
 // ✅ GLOBAL STATE
@@ -132,9 +142,15 @@ async function init() {
     
     // Initialize connection keep-alive system
     initConnectionKeepAlive();
-    
-    // Load recent peers from localStorage
+
+// Load recent peers from localStorage
     loadRecentPeers();
+    
+    // Initialize peer ID editing
+    initPeerIdEditing();
+    
+    // Initialize social media toggle
+    initSocialMediaToggle();
     
     console.log('✅ One-Host Streaming initialized successfully');
 }
@@ -186,7 +202,7 @@ async function initializePeerJS() {
         
         // Update global window object with initialized peer
         window.peer = peer;
-        
+
     } catch (error) {
         console.error('❌ Failed to initialize PeerJS:', error);
         updateConnectionStatus('error', 'Failed to initialize peer connection');
@@ -208,10 +224,12 @@ function setupPeerEventListeners() {
 
     peer.on('connection', (conn) => {
         console.log('📞 Incoming connection from:', conn.peer);
+        updateConnectionStatus('connecting', 'Incoming connection...');
         connections.set(conn.peer, conn);
         setupConnectionHandlers(conn);
         addRecentPeer(conn.peer);
-        updateConnectionStatus('connected', `Connected to: ${conn.peer}`);
+        updateConnectionStatus('connected', `Connected to peer(s): ${connections.size}`);
+        elements.fileTransferSection.classList.remove('hidden');
     });
 
     peer.on('error', (error) => {
@@ -229,7 +247,8 @@ function setupPeerEventListeners() {
 function setupConnectionHandlers(conn) {
     conn.on('open', () => {
         console.log('✅ Connection opened with:', conn.peer);
-        updateConnectionStatus('connected', `Connected to: ${conn.peer}`);
+        updateConnectionStatus('connected', `Connected to peer(s): ${connections.size}`);
+        elements.fileTransferSection.classList.remove('hidden');
         showNotification(`Connected to ${conn.peer}`, 'success');
     });
 
@@ -291,7 +310,10 @@ function setupConnectionHandlers(conn) {
     conn.on('close', () => {
         console.log('❌ Connection closed with:', conn.peer);
         connections.delete(conn.peer);
-        updateConnectionStatus();
+        updateConnectionStatus('', connections.size > 0 ? `Connected to peer(s): ${connections.size}` : 'Disconnected');
+        if (connections.size === 0) {
+            elements.fileTransferSection.classList.add('hidden');
+        }
         showNotification(`Disconnected from ${conn.peer}`, 'warning');
     });
 
@@ -336,6 +358,8 @@ window.updateRecentPeersList = updateRecentPeersList;
 window.generateQRCode = generateQRCode;
 window.showBrowserSupportError = showBrowserSupportError;
 window.handleAutoConnect = handleAutoConnect;
+window.initPeerIdEditing = initPeerIdEditing;
+window.initSocialMediaToggle = initSocialMediaToggle;
 
 // Export global state (will be updated when peer initializes)
 window.peer = peer || null;

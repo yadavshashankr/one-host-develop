@@ -118,17 +118,26 @@ export function updateRecentPeersList() {
 
 // ✅ QR CODE GENERATION
 export function generateQRCode(peerId) {
-    const qrData = `${window.location.origin}?connect=${peerId}`;
-    
-    if (typeof QRCode !== 'undefined') {
-        window.elements.qrcode.innerHTML = '';
-        new QRCode(window.elements.qrcode, {
-            text: qrData,
-            width: 200,
-            height: 200,
-            colorDark: '#000000',
-            colorLight: '#ffffff'
-        });
+    try {
+        if (!window.elements.qrcode) return;
+        window.elements.qrcode.innerHTML = ''; // Clear previous QR code
+        
+        // Generate URL with peer ID as query parameter
+        const baseUrl = window.location.origin + window.location.pathname;
+        const qrUrl = `${baseUrl}?peer=${peerId}`;
+        
+        if (typeof QRCode !== 'undefined') {
+            new QRCode(window.elements.qrcode, {
+                text: qrUrl,
+                width: 128,
+                height: 128,
+                colorDark: '#2196F3',
+                colorLight: '#ffffff',
+                correctLevel: QRCode.CorrectLevel.H
+            });
+        }
+    } catch (error) {
+        console.error('QR Code Generation Error:', error);
     }
 }
 
@@ -146,12 +155,136 @@ export function showBrowserSupportError(message) {
 // ✅ AUTO-CONNECT FROM URL
 export function handleAutoConnect() {
     const urlParams = new URLSearchParams(window.location.search);
-    const connectId = urlParams.get('connect');
+    const connectId = urlParams.get('connect') || urlParams.get('peer');
     
     if (connectId && connectId !== window.peer.id) {
         setTimeout(() => {
             window.elements.remotePeerId.value = connectId;
             window.connectToPeer(connectId);
         }, 1000);
+    }
+}
+
+// ✅ PEER ID EDITING FUNCTIONALITY
+export function initPeerIdEditing() {
+    if (window.elements.editIdButton) {
+        window.elements.editIdButton.addEventListener('click', startEditingPeerId);
+    }
+    if (window.elements.saveIdButton) {
+        window.elements.saveIdButton.addEventListener('click', saveEditedPeerId);
+    }
+    if (window.elements.cancelEditButton) {
+        window.elements.cancelEditButton.addEventListener('click', cancelEditingPeerId);
+    }
+    if (window.elements.peerIdEdit) {
+        window.elements.peerIdEdit.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                saveEditedPeerId();
+            } else if (e.key === 'Escape') {
+                cancelEditingPeerId();
+            }
+        });
+    }
+}
+
+function startEditingPeerId() {
+    if (!window.peer || window.connections.size > 0) return; // Can't edit when connected
+    
+    const currentId = window.peer.id;
+    window.elements.peerIdEdit.value = currentId;
+    window.elements.peerId.style.display = 'none';
+    window.elements.peerIdEdit.style.display = 'inline';
+    window.elements.editIdButton.style.display = 'none';
+    window.elements.saveIdButton.style.display = 'inline';
+    window.elements.cancelEditButton.style.display = 'inline';
+    window.elements.peerIdEdit.focus();
+}
+
+function saveEditedPeerId() {
+    const newPeerId = window.elements.peerIdEdit.value.trim();
+    
+    if (!newPeerId || newPeerId === window.peer.id) {
+        cancelEditingPeerId();
+        return;
+    }
+    
+    // Update peer ID
+    window.updateConnectionStatus('connecting', 'Updating peer ID...');
+    
+    try {
+        // Destroy current peer and create new one
+        if (window.peer) {
+            window.peer.destroy();
+        }
+        
+        // Create new peer with custom ID
+        const newPeer = new Peer(newPeerId, {
+            debug: 2,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ]
+            }
+        });
+        
+        newPeer.on('open', (id) => {
+            window.peer = newPeer;
+            window.elements.peerId.textContent = id;
+            window.generateQRCode(id);
+            localStorage.setItem('peerId', id);
+            window.updateConnectionStatus('', 'Ready to connect');
+            cancelEditingPeerId();
+            window.setupPeerEventListeners();
+        });
+        
+        newPeer.on('error', (error) => {
+            console.error('Error updating peer ID:', error);
+            window.updateConnectionStatus('', 'Failed to update peer ID');
+            cancelEditingPeerId();
+        });
+        
+    } catch (error) {
+        console.error('Error updating peer ID:', error);
+        window.updateConnectionStatus('', 'Failed to update peer ID');
+        cancelEditingPeerId();
+    }
+}
+
+function cancelEditingPeerId() {
+    window.elements.peerId.style.display = 'inline';
+    window.elements.peerIdEdit.style.display = 'none';
+    window.elements.editIdButton.style.display = 'inline';
+    window.elements.saveIdButton.style.display = 'none';
+    window.elements.cancelEditButton.style.display = 'none';
+}
+
+// ✅ SOCIAL MEDIA TOGGLE FUNCTIONALITY
+export function initSocialMediaToggle() {
+    console.log('Initializing social media toggle...');
+    
+    if (window.elements.socialToggle && window.elements.socialIcons) {
+        console.log('Social media elements found, adding event listeners...');
+        
+        window.elements.socialToggle.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('Social toggle clicked!');
+            
+            window.elements.socialIcons.classList.toggle('show');
+            console.log('Social icons show class:', window.elements.socialIcons.classList.contains('show'));
+        });
+
+        // Close social media menu when clicking outside
+        document.addEventListener('click', function(event) {
+            if (!window.elements.socialToggle.contains(event.target) && 
+                !window.elements.socialIcons.contains(event.target)) {
+                window.elements.socialIcons.classList.remove('show');
+            }
+        });
+        
+        console.log('Social media toggle initialized successfully!');
+    } else {
+        console.error('Social media elements not found!');
     }
 }
