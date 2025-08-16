@@ -311,6 +311,14 @@ class StreamManager {
                 }
                 break;
                 
+            case 'service-worker-heartbeat':
+                // Respond to Service Worker heartbeat to keep it alive
+                this.sendToServiceWorker({
+                    type: 'keep-alive',
+                    data: { timestamp: Date.now() }
+                });
+                break;
+                
             default:
                 console.log(`📨 Service Worker message: ${type}`, event.data);
         }

@@ -16,6 +16,7 @@ const urlsToCache = [
 // Active download streams registry
 const activeStreams = new Map();
 const streamControllers = new Map();
+let keepAliveInterval = null;
 
 // Install event: cache essential files
 self.addEventListener('install', event => {
@@ -92,11 +93,16 @@ async function handleStreamDownload(request) {
   
   // Return response with proper download headers
   return new Response(stream, {
+    status: 200,
+    statusText: 'OK',
     headers: {
       'Content-Type': streamInfo.mimeType || 'application/octet-stream',
       'Content-Disposition': `attachment; filename="${streamInfo.filename}"`,
       'Content-Length': streamInfo.size?.toString() || '',
-      'Cache-Control': 'no-cache'
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
     }
   });
 }
@@ -108,6 +114,7 @@ self.addEventListener('message', event => {
   switch (type) {
     case 'register-stream':
       registerStream(data);
+      startKeepAlive();
       break;
       
     case 'stream-chunk':
@@ -116,10 +123,16 @@ self.addEventListener('message', event => {
       
     case 'complete-stream':
       completeStream(data.fileId);
+      stopKeepAliveIfNoActiveStreams();
       break;
       
     case 'cancel-stream':
       cancelStream(data.fileId);
+      stopKeepAliveIfNoActiveStreams();
+      break;
+      
+    case 'keep-alive':
+      // Respond to keep-alive ping from main thread
       break;
       
     default:
@@ -169,7 +182,14 @@ function pipeChunkToStream(chunkData) {
       streamInfo.bytesReceived += uint8Array.length;
       streamInfo.lastChunkTime = Date.now();
       
-      console.log(`📦 Chunk ${chunkIndex} piped for fileId: ${fileId} (${uint8Array.length} bytes)`);
+      console.log(`📦 Chunk ${chunkIndex} piped for fileId: ${fileId} (${uint8Array.length} bytes) - ${streamInfo.bytesReceived}/${streamInfo.size}`);
+      
+      // Check if we've received all bytes
+      if (streamInfo.size && streamInfo.bytesReceived >= streamInfo.size) {
+        console.log(`✅ All bytes received for ${fileId}, auto-completing stream`);
+        // Auto-complete the stream when all bytes are received
+        setTimeout(() => completeStream(fileId), 100); // Small delay to ensure last chunk is processed
+      }
     } catch (error) {
       console.error(`❌ Error piping chunk for fileId: ${fileId}`, error);
     }
@@ -221,6 +241,30 @@ function cleanupStream(fileId) {
   streamControllers.delete(fileId);
   activeStreams.delete(fileId);
   console.log(`🧹 Cleaned up stream for fileId: ${fileId}`);
+}
+
+// ✅ KEEP-ALIVE MECHANISM TO PREVENT SERVICE WORKER TERMINATION
+function startKeepAlive() {
+  if (keepAliveInterval) return; // Already running
+  
+  keepAliveInterval = setInterval(() => {
+    // Send heartbeat to all clients to keep Service Worker alive
+    self.clients.matchAll().then(clients => {
+      clients.forEach(client => {
+        client.postMessage({ type: 'service-worker-heartbeat' });
+      });
+    });
+  }, 10000); // Every 10 seconds
+  
+  console.log('🔄 Keep-alive started for Service Worker');
+}
+
+function stopKeepAliveIfNoActiveStreams() {
+  if (activeStreams.size === 0 && keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+    console.log('⏹️ Keep-alive stopped - no active streams');
+  }
 }
 
 console.log('🌊 One-Host Streaming Service Worker loaded');
