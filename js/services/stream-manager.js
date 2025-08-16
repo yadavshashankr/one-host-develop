@@ -210,46 +210,38 @@ class StreamManager {
         
         // Check if Background Fetch is supported
         if ('serviceWorker' in navigator && 'backgroundFetch' in ServiceWorkerRegistration.prototype) {
-            console.log(`🎯 Using Background Fetch for Android Studio-like download: ${filename}`);
+            console.log(`🎯 Background Fetch supported - but using regular download for debugging`);
+            console.log(`📋 Using regular download method for better debugging`);
             
-            // Start Background Fetch for native Chrome download manager
-            await this.sendToServiceWorker({
-                type: 'start-background-fetch',
-                data: {
-                    fileId,
-                    filename,
-                    mimeType: streamInfo.mimeType,
-                    size: streamInfo.size
-                }
-            });
+            // For now, use regular download to debug the streaming issue
+            // TODO: Re-enable Background Fetch once streaming is working
+            // await this.sendToServiceWorker({
+            //     type: 'start-background-fetch',
+            //     data: { fileId, filename, mimeType: streamInfo.mimeType, size: streamInfo.size }
+            // });
             
-            streamInfo.isActive = true;
-            streamInfo.usingBackgroundFetch = true;
-            console.log(`🚀 Background Fetch initiated for: ${filename}`);
-            
-            return `/download/${fileId}`;
-            
-        } else {
-            console.log(`📋 Background Fetch not supported, falling back to regular download`);
-            
-            // Fallback to regular download
-            const downloadURL = `/download/${fileId}`;
-            
-            const link = document.createElement('a');
-            link.href = downloadURL;
-            link.download = filename;
-            link.style.display = 'none';
-            
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            streamInfo.isActive = true;
-            streamInfo.usingBackgroundFetch = false;
-            console.log(`🚀 Regular download started for: ${filename} (URL: ${downloadURL})`);
-            
-            return downloadURL;
         }
+        
+        // Use regular download for debugging (works for both Background Fetch supported and not)
+        const downloadURL = `/download/${fileId}`;
+        
+        console.log(`🔗 Creating download link for: ${filename} -> ${downloadURL}`);
+        
+        const link = document.createElement('a');
+        link.href = downloadURL;
+        link.download = filename;
+        link.style.display = 'none';
+        
+        document.body.appendChild(link);
+        console.log(`👆 Triggering download link click for: ${filename}`);
+        link.click();
+        document.body.removeChild(link);
+        
+        streamInfo.isActive = true;
+        streamInfo.usingBackgroundFetch = false;
+        console.log(`🚀 Regular download started for: ${filename} (URL: ${downloadURL})`);
+        
+        return downloadURL;
     }
     
     // ✅ FALLBACK REGULAR DOWNLOAD METHOD

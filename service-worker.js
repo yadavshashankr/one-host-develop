@@ -40,7 +40,10 @@ self.addEventListener('fetch', event => {
   
   // Handle streaming downloads
   if (url.pathname.startsWith('/download/')) {
+    const fileId = url.pathname.split('/download/')[1];
     console.log(`🌊 Service Worker: Intercepted download request for: ${url.pathname}`);
+    console.log(`📋 FileId extracted: ${fileId}`);
+    console.log(`⏰ Download request timestamp: ${new Date().toISOString()}`);
     event.respondWith(handleStreamDownload(event.request));
     return;
   }
@@ -74,6 +77,15 @@ async function handleStreamDownload(request) {
   
   console.log(`🎯 Using pre-created stream for: ${streamInfo.filename} (${fileId})`);
   console.log(`📊 Active streams: ${activeStreams.size}, Controllers: ${streamControllers.size}`);
+  
+  // Debug: Check if controller exists for this fileId
+  const controller = streamControllers.get(fileId);
+  if (controller) {
+    console.log(`✅ Stream controller found for download: ${fileId}`);
+  } else {
+    console.error(`❌ No stream controller found for download: ${fileId}`);
+    console.log(`🔍 Available controllers:`, Array.from(streamControllers.keys()));
+  }
   
   // Return response with proper download headers for browser download manager
   const headers = new Headers({
@@ -207,31 +219,40 @@ function pipeChunkToStream(chunkData) {
   const controller = streamControllers.get(fileId);
   const streamInfo = activeStreams.get(fileId);
   
+  console.log(`🔄 Attempting to pipe chunk ${chunkIndex} for fileId: ${fileId}`);
+  console.log(`🔍 Controller exists: ${!!controller}, StreamInfo exists: ${!!streamInfo}`);
+  
   if (controller && streamInfo) {
     try {
       // Convert ArrayBuffer to Uint8Array and enqueue
       const uint8Array = new Uint8Array(data);
+      console.log(`📤 Enqueueing chunk ${chunkIndex}: ${uint8Array.length} bytes`);
+      
       controller.enqueue(uint8Array);
+      console.log(`✅ Chunk ${chunkIndex} successfully enqueued`);
       
       // Update stream info
       streamInfo.bytesReceived += uint8Array.length;
       streamInfo.lastChunkTime = Date.now();
       
-      console.log(`📦 Chunk ${chunkIndex} piped for fileId: ${fileId} (${uint8Array.length} bytes) - ${streamInfo.bytesReceived}/${streamInfo.size}`);
+      console.log(`📊 Progress: ${streamInfo.bytesReceived}/${streamInfo.size} bytes (${((streamInfo.bytesReceived / streamInfo.size) * 100).toFixed(1)}%)`);
       
       // Check if we've received all bytes
       if (streamInfo.size && streamInfo.bytesReceived >= streamInfo.size) {
-        console.log(`✅ All bytes received for ${fileId}, auto-completing stream`);
+        console.log(`🎯 All bytes received for ${fileId}, auto-completing stream`);
         // Auto-complete the stream when all bytes are received
         setTimeout(() => completeStream(fileId), 100); // Small delay to ensure last chunk is processed
       }
     } catch (error) {
-      console.error(`❌ Error piping chunk for fileId: ${fileId}`, error);
+      console.error(`❌ Error piping chunk ${chunkIndex} for fileId: ${fileId}`, error);
+      console.error(`❌ Error details:`, error.stack);
     }
   } else {
-    console.warn(`⚠️ Controller or stream info not found for fileId: ${fileId}`);
-    if (!controller) console.warn(`Missing controller for: ${fileId}`);
-    if (!streamInfo) console.warn(`Missing stream info for: ${fileId}`);
+    console.error(`❌ Cannot pipe chunk ${chunkIndex} for fileId: ${fileId}`);
+    console.log(`🔍 Available controllers:`, Array.from(streamControllers.keys()));
+    console.log(`🔍 Available streams:`, Array.from(activeStreams.keys()));
+    if (!controller) console.error(`❌ Missing controller for: ${fileId}`);
+    if (!streamInfo) console.error(`❌ Missing stream info for: ${fileId}`);
   }
 }
 
