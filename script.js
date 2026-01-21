@@ -773,6 +773,12 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
             autoModeNotification = null;
         }
         
+        // NOTE: Do NOT dismiss wake lock tip notification on connection success.
+        // The wake lock tip notification should only be dismissed when the user:
+        // 1. Clicks the X button, or
+        // 2. Clicks anywhere else on the page (outside the notification)
+        // The dismiss functionality is already implemented in showTipNotification().
+        
         // Scroll to file transfer section on first connection
         if (connections.size === 1 && elements.fileTransferSection) {
             // Use setTimeout to ensure DOM has updated and section is visible
@@ -2702,15 +2708,20 @@ function showTipNotification(message, type = 'info') {
     });
     
     // Handle document click (anywhere on page, outside notification)
+    // Only dismiss on actual user clicks, not programmatic or system events
     documentClickHandler = (e) => {
         // Don't dismiss if clicking inside the notification
         if (!notification.contains(e.target)) {
-            dismissNotification();
+            // Only dismiss if this is a genuine user click (not a programmatic event)
+            // Check if the event is trusted (user-initiated) and is a mouse/touch click
+            if (e.isTrusted && (e.type === 'click' || e.type === 'mousedown' || e.type === 'touchstart')) {
+                dismissNotification();
+            }
         }
     };
     
     // Add document click listener (use capture phase to catch early)
-    // Small delay to prevent immediate dismissal on page load
+    // Small delay to prevent immediate dismissal on page load or connection events
     setTimeout(() => {
         if (!isDismissed) {
             document.addEventListener('click', documentClickHandler, true);
