@@ -157,6 +157,9 @@ let reconnectionManager = null;
 // Track previous connection status to avoid duplicate reconnection triggers
 let previousConnectionStatus = '';
 
+// Track previous peer ID to detect when peer reconnects with same ID
+let previousPeerId = null;
+
 // State
 let peer = null;
 let connections = new Map(); // Map to store multiple connections
@@ -618,23 +621,43 @@ function setupPeerHandlers() {
             console.error('❌ Peer ID element not found!');
         }
         
+        // Check if peer reconnected with the same ID (signaling server reconnect)
+        const isSamePeerId = previousPeerId === id;
+        if (isSamePeerId && sessionStateManager && sessionStateManager.getTrackedPeersCount() > 0) {
+            console.log(`🔄 Peer reconnected with same ID (${id}), resetting tried flags for tracked peers...`);
+            // Reset tried flags for all tracked peers when peer reconnects with same ID
+            // This allows reconnection attempts even if previous attempts failed
+            const trackedPeers = sessionStateManager.getAllTrackedPeers();
+            trackedPeers.forEach(peerId => {
+                sessionStateManager.resetPeerTried(peerId);
+            });
+        }
+        
+        // Update previous peer ID
+        previousPeerId = id;
+        
         updateConnectionStatus('', 'Ready to connect');
         generateQRCode(id);
         initShareButton();
         updateEditButtonState();
         
-        // Check if we should trigger reconnection after peer reconnects
-        // This handles the case where signaling server disconnected and peer reconnected
+        // Always attempt reconnection when peer reconnects with same ID and we have tracked peers
+        // This works like the connect button - always tries to establish new connections
         if (sessionStateManager && sessionStateManager.getSessionAvailable() && 
             sessionStateManager.getTrackedPeersCount() > 0 &&
-            (!connections || connections.size === 0) &&
             reconnectionManager && !reconnectionManager.isReconnectingInProgress()) {
-            const untriedPeers = sessionStateManager.getUntriedPeers();
-            if (untriedPeers.length > 0) {
-                console.log(`🔄 Peer reconnected after disconnect, triggering reconnection to ${untriedPeers.length} untried peer(s)...`);
+            
+            // Get all tracked peers (not just untried ones) when peer reconnects with same ID
+            // This ensures we always try to reconnect, even if previous attempts failed
+            const peersToReconnect = isSamePeerId ? 
+                sessionStateManager.getAllTrackedPeers() : 
+                sessionStateManager.getUntriedPeers();
+            
+            if (peersToReconnect.length > 0) {
+                console.log(`🔄 Peer ${isSamePeerId ? 'reconnected with same ID' : 'opened'}, triggering reconnection to ${peersToReconnect.length} tracked peer(s)...`);
                 // Small delay to ensure status update completes first
                 setTimeout(() => {
-                    reconnectionManager.reconnectToPeers(untriedPeers);
+                    reconnectionManager.reconnectToPeers(peersToReconnect);
                 }, 500);
             }
         }
@@ -3556,11 +3579,15 @@ function updateConnectionStatus(status, message) {
     // 4. We're not coming from "Connecting..." state (to avoid re-triggering after reconnection completes)
     // 5. Reconnection is not already in progress
     const isFirstStatusAfterPeerOpen = !previousConnectionStatus && sessionStateManager && sessionStateManager.getTrackedPeersCount() > 0;
+    
+    // Check if we have any actually open/working connections
+    const hasActiveConnections = connections && Array.from(connections.values()).some(conn => conn && conn.open);
+    
     const isReconnectingAfterDisconnect = wasDisconnected && 
                                           normalizedMessageLower.includes('ready to connect') && 
                                           sessionStateManager && 
                                           sessionStateManager.getTrackedPeersCount() > 0 &&
-                                          (!connections || connections.size === 0);
+                                          !hasActiveConnections; // Only trigger if no active connections (closed connections don't count)
     
     const shouldTriggerReconnection = sessionStateManager && sessionStateManager.getSessionAvailable() && 
         isDisconnectedOrReady && 

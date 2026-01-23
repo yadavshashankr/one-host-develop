@@ -61,7 +61,7 @@ class ReconnectionManager {
         const connectionPromises = [];
         
         for (const peerId of peerIds) {
-            // Skip if already connected and connection is healthy
+            // Check if already connected and connection is healthy
             if (this.connections.has(peerId)) {
                 const existingConn = this.connections.get(peerId);
                 // Check if connection is open AND can send data (verify it's actually working)
@@ -85,7 +85,8 @@ class ReconnectionManager {
                         this.connections.delete(peerId);
                     }
                 } else {
-                    // Connection exists but not open, remove it
+                    // Connection exists but not open, remove it to allow new connection
+                    console.log(`🔄 Removing closed connection to ${peerId}, will create new connection`);
                     this.connections.delete(peerId);
                 }
             }
