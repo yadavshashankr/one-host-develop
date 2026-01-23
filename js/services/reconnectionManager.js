@@ -115,15 +115,22 @@ class ReconnectionManager {
         // Clear reconnection flag
         this.isReconnecting = false;
         
-        // Update final status
-        if (connectedCount > 0) {
-            // Reset reconnection flag before updating status to avoid triggering reconnection again
-            this.isReconnecting = false;
+        // Update final status based on actual connections, not just new connections
+        // Check if we have any active connections (existing or newly established)
+        const hasActiveConnections = this.connections.size > 0 && 
+            Array.from(this.connections.values()).some(conn => conn && conn.open);
+        
+        if (hasActiveConnections) {
+            // We have active connections, update status to "Connected"
             this.updateConnectionStatus('connected', `Connected to peer(s) : ${this.connections.size}`);
-            console.log(`✅ Successfully reconnected to ${connectedCount} peer(s)`);
+            // Ensure file transfer section is visible
+            if (this.elements.fileTransferSection) {
+                this.elements.fileTransferSection.classList.remove('hidden');
+                console.log(`📁 File transfer section kept visible (${this.connections.size} peer(s) connected)`);
+            }
+            console.log(`✅ Successfully reconnected to ${this.connections.size} peer(s)`);
         } else {
-            // Reset reconnection flag before updating status
-            this.isReconnecting = false;
+            // No active connections, update status to "Ready to connect"
             this.updateConnectionStatus('', 'Ready to connect');
             // Only hide file transfer section if no peers available
             if (this.elements.fileTransferSection) {

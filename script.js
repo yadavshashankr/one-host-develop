@@ -3678,22 +3678,40 @@ function updateConnectionStatus(status, message) {
     elements.statusText.textContent = normalizedMessage;
     
     // Hide file transfer section when status is "Ready to connect"
-    // BUT don't hide if we're reconnecting
+    // BUT don't hide if we're reconnecting OR if connections actually exist
     if (message && normalizedMessageLower === 'ready to connect') {
-        // Only hide if we're not in reconnection mode
-        if (!reconnectionManager || !reconnectionManager.isReconnectingInProgress()) {
+        // Check if we have active connections
+        const hasActiveConnections = connections && connections.size > 0 && 
+            Array.from(connections.values()).some(conn => conn && conn.open);
+        
+        // Only hide if:
+        // 1. We're not in reconnection mode, AND
+        // 2. We don't have active connections
+        if ((!reconnectionManager || !reconnectionManager.isReconnectingInProgress()) && !hasActiveConnections) {
             if (elements.fileTransferSection) {
                 elements.fileTransferSection.classList.add('hidden');
-                console.log('📁 File transfer section hidden (status: Ready to connect)');
+                console.log('📁 File transfer section hidden (status: Ready to connect, no active connections)');
             }
         } else {
-            console.log('📁 File transfer section kept visible (reconnection in progress)');
+            if (hasActiveConnections) {
+                console.log('📁 File transfer section kept visible (active connections exist)');
+            } else {
+                console.log('📁 File transfer section kept visible (reconnection in progress)');
+            }
         }
         
         // If auto mode is enabled, check WiFi and disable/hide if not detected
         if (autoModeEnabled) {
             console.log('🔍 Auto mode is enabled, checking WiFi status...');
             checkAndDisableAutoModeIfNoWiFi();
+        }
+    }
+    
+    // Ensure file transfer section is visible when status is "Connected to peer(s) : X"
+    if (normalizedMessageLower.includes('connected to peer')) {
+        if (elements.fileTransferSection && connections && connections.size > 0) {
+            elements.fileTransferSection.classList.remove('hidden');
+            console.log(`📁 File transfer section made visible (${connections.size} peer(s) connected)`);
         }
     }
     
