@@ -61,19 +61,39 @@ class ReconnectionManager {
         const connectionPromises = [];
         
         for (const peerId of peerIds) {
-            // Skip if already connected
+            // Skip if already connected and connection is healthy
             if (this.connections.has(peerId)) {
                 const existingConn = this.connections.get(peerId);
+                // Check if connection is open AND can send data (verify it's actually working)
                 if (existingConn && existingConn.open) {
-                    connectedCount++;
-                    console.log(`✅ Already connected to ${peerId}`);
-                    // Reset tried flag since connection is active
-                    this.sessionStateManager.resetPeerTried(peerId);
-                    continue;
+                    try {
+                        // Try to send a test message to verify connection is actually working
+                        // If this succeeds, the connection is healthy
+                        existingConn.send({
+                            type: 'health-check',
+                            timestamp: Date.now(),
+                            peerId: this.peer.id
+                        });
+                        connectedCount++;
+                        console.log(`✅ Already connected to ${peerId} (connection verified)`);
+                        // Reset tried flag since connection is active
+                        this.sessionStateManager.resetPeerTried(peerId);
+                        continue;
+                    } catch (error) {
+                        console.warn(`⚠️ Connection to ${peerId} exists but cannot send data:`, error);
+                        // Connection exists but not working, remove it and reconnect
+                        this.connections.delete(peerId);
+                    }
                 } else {
+                    // Connection exists but not open, remove it
                     this.connections.delete(peerId);
                 }
             }
+            
+            // Before attempting new connection, check if peer is actually available
+            // by checking if we recently received keep-alive from this peer
+            // (This is a heuristic - if keep-alive is working, connection might still be alive)
+            // We'll attempt connection anyway, but won't mark as tried immediately on timeout
             
             // Skip self
             if (peerId === this.peer.id) {

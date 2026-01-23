@@ -877,6 +877,42 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                 case 'keep-alive-response':
                     // Handle keep-alive response
                     console.log(`Keep-alive response received from peer ${conn.peer}`);
+                    // If we received a keep-alive response, the connection is healthy
+                    // Cancel any pending connection error timeouts for this peer
+                    if (connectionTimeouts.has(conn.peer)) {
+                        clearTimeout(connectionTimeouts.get(conn.peer));
+                        connectionTimeouts.delete(conn.peer);
+                        console.log(`✅ Cancelled connection error timeout for ${conn.peer} (keep-alive confirmed healthy)`);
+                    }
+                    
+                    // Reset the peer's tried flag if it was marked as tried
+                    if (sessionStateManager && sessionStateManager.getTrackedPeersCount() > 0) {
+                        const trackedPeers = sessionStateManager.getAllTrackedPeers();
+                        if (trackedPeers.includes(conn.peer)) {
+                            // Connection is healthy, reset tried flag
+                            sessionStateManager.resetPeerTried(conn.peer);
+                            // Ensure connection is in the connections map
+                            if (!connections.has(conn.peer)) {
+                                connections.set(conn.peer, conn);
+                                console.log(`✅ Added connection to map for ${conn.peer} (keep-alive confirmed)`);
+                            }
+                            // If we're in reconnection mode and this peer was marked as tried, update status
+                            if (reconnectionManager && reconnectionManager.isReconnectingInProgress()) {
+                                // Check if we have active connections
+                                if (connections.size > 0) {
+                                    // Reset reconnection flag and update status
+                                    reconnectionManager.resetReconnectionState();
+                                    updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                                    console.log(`✅ Connection confirmed healthy via keep-alive for ${conn.peer}, updating status and stopping reconnection`);
+                                }
+                            } else {
+                                // Not in reconnection mode, but ensure status is correct
+                                if (connections.size > 0) {
+                                    updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                                }
+                            }
+                        }
+                    }
                     break;
                 case 'health-check':
                     // Handle health check message
@@ -1009,14 +1045,39 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
         
         // Don't immediately show error notification - it might be temporary
         // Only attempt reconnection if it persists for a while
+        // But first check if keep-alive is still working (connection might be healthy)
         if (!connectionTimeouts.has(conn.peer)) {
             const timeout = setTimeout(() => {
-                console.log(`⚠️ Connection error persisted for ${conn.peer}, attempting reconnection...`);
-                updateConnectionStatus('', 'Connection error');
+                // Before showing error, check if connection is actually dead
+                // If keep-alive is still working, don't show error
+                const isConnectionHealthy = checkConnectionHealth(conn, conn.peer);
                 
-                // Attempt reconnection
-                console.log(`Attempting to reconnect to ${conn.peer} after error...`);
-                reconnectToPeer(conn.peer);
+                if (!isConnectionHealthy && (!conn.open || !connections.has(conn.peer))) {
+                    console.log(`⚠️ Connection error persisted for ${conn.peer}, attempting reconnection...`);
+                    // Only show error if reconnection manager is not already handling it
+                    if (!reconnectionManager || !reconnectionManager.isReconnectingInProgress()) {
+                        updateConnectionStatus('', 'Connection error');
+                    }
+                    
+                    // Attempt reconnection via reconnection manager if session is available
+                    if (sessionStateManager && sessionStateManager.getSessionAvailable()) {
+                        const untriedPeers = sessionStateManager.getUntriedPeers();
+                        if (untriedPeers.length > 0 && reconnectionManager) {
+                            console.log(`Attempting to reconnect to ${conn.peer} via reconnection manager...`);
+                            reconnectionManager.reconnectToPeers(untriedPeers);
+                        }
+                    } else {
+                        // Fallback to old reconnection method
+                        console.log(`Attempting to reconnect to ${conn.peer} after error...`);
+                        reconnectToPeer(conn.peer);
+                    }
+                } else {
+                    console.log(`✅ Connection to ${conn.peer} is actually healthy, not showing error`);
+                    // Connection is healthy, update status if needed
+                    if (connections.size > 0) {
+                        updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                    }
+                }
                 connectionTimeouts.delete(conn.peer);
             }, 8000); // Wait 8 seconds before attempting reconnection
             
