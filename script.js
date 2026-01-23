@@ -148,6 +148,12 @@ const zipPartManager = new ZipPartManager();
 // Initialize bulk download manager (class loaded from js/services/bulkDownloadManager.js)
 const bulkDownloadManager = new BulkDownloadManager(memoryMonitor, zipPartManager, deviceManager);
 
+// Initialize session state manager (class loaded from js/services/sessionStateManager.js)
+const sessionStateManager = new SessionStateManager();
+
+// Initialize reconnection manager (will be initialized after peer is created)
+let reconnectionManager = null;
+
 // State
 let peer = null;
 let connections = new Map(); // Map to store multiple connections
@@ -745,6 +751,23 @@ function initPeerJS() {
         // Create new peer with auto-generated ID
         peer = new Peer(PEER_CONFIG);
 
+        // Initialize reconnection manager after peer is created
+        if (!reconnectionManager) {
+            reconnectionManager = new ReconnectionManager(
+                sessionStateManager,
+                peer,
+                connections,
+                setupConnectionHandlers,
+                updateConnectionStatus,
+                elements,
+                CONNECTION_TIMEOUT
+            );
+            console.log('✅ Reconnection manager initialized');
+        } else {
+            // Update peer reference if manager already exists
+            reconnectionManager.updatePeerReference(peer);
+        }
+
         setupPeerHandlers();
 
     } catch (error) {
@@ -761,6 +784,11 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
         isConnectionReady = true;
         updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
         elements.fileTransferSection.classList.remove('hidden');
+        
+        // Track this peer for reconnection
+        if (sessionStateManager) {
+            sessionStateManager.addTrackedPeer(conn.peer);
+        }
         
         // Activate screen wake when connection is established
         screenWake.activateFromConnection();
@@ -3091,6 +3119,9 @@ function init() {
         return;
     }
 
+    // Load session state from sessionStorage (before initializing peer)
+    sessionStateManager.loadState();
+
     initPeerJS();
     initIndexedDB();
     loadRecentPeers();
@@ -3407,14 +3438,53 @@ document.head.appendChild(style);
 
 // Add function to update connection status
 function updateConnectionStatus(status, message) {
+    const normalizedMessage = message ? message.charAt(0).toUpperCase() + message.slice(1) : '';
+    const normalizedMessageLower = normalizedMessage.toLowerCase();
+    
+    // Detect when status changes to "Connected to Peer(s) : X"
+    if (normalizedMessageLower.includes('connected to peer')) {
+        if (sessionStateManager) {
+            sessionStateManager.setSessionAvailable(true);
+        }
+    }
+    
+    // Detect when status changes to "Disconnected" or "Ready to connect"
+    // and trigger reconnection if sessionAvailable is true
+    if (sessionStateManager && sessionStateManager.getSessionAvailable() && 
+        (normalizedMessageLower.includes('disconnected') || 
+         normalizedMessageLower.includes('ready to connect'))) {
+        
+        // Get untried peers
+        const untriedPeers = sessionStateManager.getUntriedPeers();
+        
+        // Check if we have untried peers to reconnect to
+        if (untriedPeers.length > 0) {
+            console.log(`🔄 Status changed to disconnected/ready, reconnecting to ${untriedPeers.length} untried peer(s)...`);
+            // Immediately reconnect (no checks, just connect)
+            if (reconnectionManager) {
+                reconnectionManager.reconnectToPeers(untriedPeers);
+            }
+        } else if (sessionStateManager.getTrackedPeersCount() > 0) {
+            console.log('ℹ️ All tracked peers have been tried, skipping reconnection');
+        } else {
+            console.log('ℹ️ No tracked peers to reconnect to');
+        }
+    }
+    
     elements.statusDot.className = 'status-dot ' + (status || '');
-    elements.statusText.textContent = message.charAt(0).toUpperCase() + message.slice(1);  // Ensure sentence case
+    elements.statusText.textContent = normalizedMessage;
     
     // Hide file transfer section when status is "Ready to connect"
-    if (message && message.toLowerCase() === 'ready to connect') {
-        if (elements.fileTransferSection) {
-            elements.fileTransferSection.classList.add('hidden');
-            console.log('📁 File transfer section hidden (status: Ready to connect)');
+    // BUT don't hide if we're reconnecting
+    if (message && normalizedMessageLower === 'ready to connect') {
+        // Only hide if we're not in reconnection mode
+        if (!reconnectionManager || !reconnectionManager.isReconnectingInProgress()) {
+            if (elements.fileTransferSection) {
+                elements.fileTransferSection.classList.add('hidden');
+                console.log('📁 File transfer section hidden (status: Ready to connect)');
+            }
+        } else {
+            console.log('📁 File transfer section kept visible (reconnection in progress)');
         }
         
         // If auto mode is enabled, check WiFi and disable/hide if not detected
@@ -5847,6 +5917,11 @@ async function switchToAutoMode() {
             }
         });
         
+        // Update reconnection manager peer reference
+        if (reconnectionManager) {
+            reconnectionManager.updatePeerReference(peer);
+        }
+        
         setupPeerHandlers();
         
         // Wait for the peer to be ready
@@ -6001,6 +6076,11 @@ async function switchFromAutoMode() {
                 ]
             }
         });
+        
+        // Update reconnection manager peer reference
+        if (reconnectionManager) {
+            reconnectionManager.updatePeerReference(peer);
+        }
         
         setupPeerHandlers();
         
@@ -6300,6 +6380,11 @@ async function saveEditedPeerId() {
         
         // Initialize new peer with custom ID
         peer = new Peer(newPeerId, PEER_CONFIG);
+        
+        // Update reconnection manager peer reference
+        if (reconnectionManager) {
+            reconnectionManager.updatePeerReference(peer);
+        }
         
         setupPeerHandlers();
         
