@@ -154,6 +154,9 @@ const sessionStateManager = new SessionStateManager();
 // Initialize reconnection manager (will be initialized after peer is created)
 let reconnectionManager = null;
 
+// Track previous connection status to avoid duplicate reconnection triggers
+let previousConnectionStatus = '';
+
 // State
 let peer = null;
 let connections = new Map(); // Map to store multiple connections
@@ -1047,7 +1050,13 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
         // Update status if no more connections
         if (connections.size === 0) {
             updateConnectionStatus('', 'Ready to connect');
-            elements.fileTransferSection.classList.add('hidden');
+            // Don't hide file transfer section here - let updateConnectionStatus handle it
+            // It will check if reconnection is in progress before hiding
+            if (!reconnectionManager || !reconnectionManager.isReconnectingInProgress()) {
+                if (elements.fileTransferSection) {
+                    elements.fileTransferSection.classList.add('hidden');
+                }
+            }
         } else {
             updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
         }
@@ -2850,7 +2859,10 @@ function resetConnection() {
     transferInProgress = false;
     fileQueue = []; // Clear the file queue
     isProcessingQueue = false;
-    elements.fileTransferSection.classList.add('hidden');
+    // Don't hide file transfer section if reconnection is in progress
+    if (!reconnectionManager || !reconnectionManager.isReconnectingInProgress()) {
+        elements.fileTransferSection.classList.add('hidden');
+    }
     elements.transferProgress.classList.add('hidden');
     elements.progress.style.width = '0%';
     elements.transferInfo.style.display = 'none';
@@ -3450,16 +3462,32 @@ function updateConnectionStatus(status, message) {
     
     // Detect when status changes to "Disconnected" or "Ready to connect"
     // and trigger reconnection if sessionAvailable is true
-    if (sessionStateManager && sessionStateManager.getSessionAvailable() && 
-        (normalizedMessageLower.includes('disconnected') || 
-         normalizedMessageLower.includes('ready to connect'))) {
-        
+    // Only trigger once per transition (avoid duplicate triggers)
+    const wasConnected = previousConnectionStatus && previousConnectionStatus.toLowerCase().includes('connected to peer');
+    const wasConnecting = previousConnectionStatus && previousConnectionStatus.toLowerCase().includes('connecting');
+    const isDisconnectedOrReady = normalizedMessageLower.includes('disconnected') || 
+                                   normalizedMessageLower.includes('ready to connect');
+    
+    // Trigger reconnection if:
+    // 1. Session is available (we were connected before)
+    // 2. Status is disconnected/ready
+    // 3. Either we were connected before (wasConnected) OR this is the first status update after peer opens (previousConnectionStatus is empty) AND we have tracked peers
+    // 4. We're not coming from "Connecting..." state (to avoid re-triggering after reconnection completes)
+    // 5. Reconnection is not already in progress
+    const isFirstStatusAfterPeerOpen = !previousConnectionStatus && sessionStateManager && sessionStateManager.getTrackedPeersCount() > 0;
+    const shouldTriggerReconnection = sessionStateManager && sessionStateManager.getSessionAvailable() && 
+        isDisconnectedOrReady && 
+        (wasConnected || isFirstStatusAfterPeerOpen) && // Allow reconnection if we were connected OR if this is first status after peer opens with tracked peers
+        !wasConnecting && // Don't trigger if we're coming from "Connecting..." state
+        !reconnectionManager?.isReconnectingInProgress();
+    
+    if (shouldTriggerReconnection) {
         // Get untried peers
         const untriedPeers = sessionStateManager.getUntriedPeers();
         
         // Check if we have untried peers to reconnect to
         if (untriedPeers.length > 0) {
-            console.log(`🔄 Status changed to disconnected/ready, reconnecting to ${untriedPeers.length} untried peer(s)...`);
+            console.log(`🔄 Status changed from "${previousConnectionStatus || 'initial'}" to "${normalizedMessage}", reconnecting to ${untriedPeers.length} untried peer(s)...`);
             // Immediately reconnect (no checks, just connect)
             if (reconnectionManager) {
                 reconnectionManager.reconnectToPeers(untriedPeers);
@@ -3470,6 +3498,9 @@ function updateConnectionStatus(status, message) {
             console.log('ℹ️ No tracked peers to reconnect to');
         }
     }
+    
+    // Update previous status
+    previousConnectionStatus = normalizedMessage;
     
     elements.statusDot.className = 'status-dot ' + (status || '');
     elements.statusText.textContent = normalizedMessage;

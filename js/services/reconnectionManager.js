@@ -30,6 +30,16 @@ class ReconnectionManager {
         // Check if peer is available
         if (!this.peer || this.peer.destroyed) {
             console.log('ℹ️ Peer not available, cannot reconnect');
+            this.isReconnecting = false; // Reset flag
+            return;
+        }
+        
+        // Check if peer is open (ready to make connections)
+        // If not open, we'll wait a bit and check again, but don't set isReconnecting yet
+        if (!this.peer.open) {
+            console.log('ℹ️ Peer not open yet, will retry reconnection after peer opens');
+            // Don't set isReconnecting flag yet, let the peer.on('open') handler trigger reconnection
+            // when the peer becomes available
             return;
         }
         
@@ -86,9 +96,13 @@ class ReconnectionManager {
         
         // Update final status
         if (connectedCount > 0) {
+            // Reset reconnection flag before updating status to avoid triggering reconnection again
+            this.isReconnecting = false;
             this.updateConnectionStatus('connected', `Connected to peer(s) : ${this.connections.size}`);
             console.log(`✅ Successfully reconnected to ${connectedCount} peer(s)`);
         } else {
+            // Reset reconnection flag before updating status
+            this.isReconnecting = false;
             this.updateConnectionStatus('', 'Ready to connect');
             // Only hide file transfer section if no peers available
             if (this.elements.fileTransferSection) {
