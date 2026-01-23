@@ -144,12 +144,31 @@ class ReconnectionManager {
                 });
                 
                 const timeout = setTimeout(() => {
+                    // Before timing out, check if a connection already exists and is healthy
+                    const existingConn = this.connections.get(peerId);
+                    if (existingConn && existingConn.open && existingConn !== newConnection) {
+                        // Connection already exists and is healthy, don't mark as tried
+                        console.log(`✅ Connection to ${peerId} already exists and is healthy, cancelling timeout`);
+                        clearTimeout(timeout);
+                        // Reset tried flag since connection is active
+                        this.sessionStateManager.resetPeerTried(peerId);
+                        resolve(true);
+                        return;
+                    }
+                    
                     console.warn(`⏱️ Reconnection timeout for ${peerId}`);
                     if (this.connections.has(peerId) && this.connections.get(peerId) === newConnection) {
                         this.connections.delete(peerId);
                     }
-                    // Mark as tried since reconnection failed
-                    this.sessionStateManager.markPeerAsTried(peerId);
+                    // Only mark as tried if connection truly failed (not if it exists and is healthy)
+                    // Check one more time if connection exists
+                    const finalCheck = this.connections.get(peerId);
+                    if (!finalCheck || !finalCheck.open) {
+                        this.sessionStateManager.markPeerAsTried(peerId);
+                    } else {
+                        console.log(`✅ Connection to ${peerId} exists and is healthy, not marking as tried`);
+                        this.sessionStateManager.resetPeerTried(peerId);
+                    }
                     resolve(false);
                 }, this.CONNECTION_TIMEOUT);
                 

@@ -645,7 +645,13 @@ function setupPeerHandlers() {
         // This works like the connect button - always tries to establish new connections
         if (sessionStateManager && sessionStateManager.getSessionAvailable() && 
             sessionStateManager.getTrackedPeersCount() > 0 &&
-            reconnectionManager && !reconnectionManager.isReconnectingInProgress()) {
+            reconnectionManager) {
+            
+            // If reconnection is in progress, reset it first (peer reconnected, so we should retry)
+            if (reconnectionManager.isReconnectingInProgress()) {
+                console.log('🔄 Resetting reconnection state (peer reconnected with same ID)');
+                reconnectionManager.resetReconnectionState();
+            }
             
             // Get all tracked peers (not just untried ones) when peer reconnects with same ID
             // This ensures we always try to reconnect, even if previous attempts failed
@@ -942,12 +948,21 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                                     // Reset reconnection flag and update status
                                     reconnectionManager.resetReconnectionState();
                                     updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                                    // Ensure file transfer section is visible
+                                    if (elements.fileTransferSection) {
+                                        elements.fileTransferSection.classList.remove('hidden');
+                                        console.log('📁 File transfer section made visible (connection confirmed via keep-alive)');
+                                    }
                                     console.log(`✅ Connection confirmed healthy via keep-alive for ${conn.peer}, updating status and stopping reconnection`);
                                 }
                             } else {
                                 // Not in reconnection mode, but ensure status is correct
                                 if (connections.size > 0) {
                                     updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                                    // Ensure file transfer section is visible
+                                    if (elements.fileTransferSection) {
+                                        elements.fileTransferSection.classList.remove('hidden');
+                                    }
                                 }
                             }
                         }
@@ -1624,6 +1639,17 @@ async function requestAndDownloadBlob(fileInfo) {
                     clearTimeout(timeout);
                     connections.set(fileInfo.sharedBy, conn);
                     setupConnectionHandlers(conn);
+                    // Update status immediately when connection is established via file download
+                    updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                    // Ensure file transfer section is visible
+                    if (elements.fileTransferSection) {
+                        elements.fileTransferSection.classList.remove('hidden');
+                        console.log('📁 File transfer section made visible (connection established via file download)');
+                    }
+                    // Track this peer for reconnection
+                    if (sessionStateManager) {
+                        sessionStateManager.addTrackedPeer(fileInfo.sharedBy);
+                    }
                     resolve();
                 });
 
