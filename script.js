@@ -623,6 +623,22 @@ function setupPeerHandlers() {
         initShareButton();
         updateEditButtonState();
         
+        // Check if we should trigger reconnection after peer reconnects
+        // This handles the case where signaling server disconnected and peer reconnected
+        if (sessionStateManager && sessionStateManager.getSessionAvailable() && 
+            sessionStateManager.getTrackedPeersCount() > 0 &&
+            (!connections || connections.size === 0) &&
+            reconnectionManager && !reconnectionManager.isReconnectingInProgress()) {
+            const untriedPeers = sessionStateManager.getUntriedPeers();
+            if (untriedPeers.length > 0) {
+                console.log(`🔄 Peer reconnected after disconnect, triggering reconnection to ${untriedPeers.length} untried peer(s)...`);
+                // Small delay to ensure status update completes first
+                setTimeout(() => {
+                    reconnectionManager.reconnectToPeers(untriedPeers);
+                }, 500);
+            }
+        }
+        
         // Retrieve private IP and update auto mode button visibility after peer ID is generated
         // This ensures DOM is ready and peer is initialized
         console.log('🌐 Retrieving private IP to determine connection type...');
@@ -3525,6 +3541,7 @@ function updateConnectionStatus(status, message) {
     // and trigger reconnection if sessionAvailable is true
     // Only trigger once per transition (avoid duplicate triggers)
     const wasConnected = previousConnectionStatus && previousConnectionStatus.toLowerCase().includes('connected to peer');
+    const wasDisconnected = previousConnectionStatus && previousConnectionStatus.toLowerCase().includes('disconnected');
     const wasConnecting = previousConnectionStatus && previousConnectionStatus.toLowerCase().includes('connecting');
     const isDisconnectedOrReady = normalizedMessageLower.includes('disconnected') || 
                                    normalizedMessageLower.includes('ready to connect');
@@ -3532,13 +3549,22 @@ function updateConnectionStatus(status, message) {
     // Trigger reconnection if:
     // 1. Session is available (we were connected before)
     // 2. Status is disconnected/ready
-    // 3. Either we were connected before (wasConnected) OR this is the first status update after peer opens (previousConnectionStatus is empty) AND we have tracked peers
+    // 3. Either:
+    //    - We were connected before (wasConnected), OR
+    //    - This is the first status update after peer opens (previousConnectionStatus is empty) AND we have tracked peers, OR
+    //    - Previous status was "Disconnected" (signaling server disconnect) AND current status is "Ready to connect" (peer reconnected) AND we have tracked peers AND no active connections
     // 4. We're not coming from "Connecting..." state (to avoid re-triggering after reconnection completes)
     // 5. Reconnection is not already in progress
     const isFirstStatusAfterPeerOpen = !previousConnectionStatus && sessionStateManager && sessionStateManager.getTrackedPeersCount() > 0;
+    const isReconnectingAfterDisconnect = wasDisconnected && 
+                                          normalizedMessageLower.includes('ready to connect') && 
+                                          sessionStateManager && 
+                                          sessionStateManager.getTrackedPeersCount() > 0 &&
+                                          (!connections || connections.size === 0);
+    
     const shouldTriggerReconnection = sessionStateManager && sessionStateManager.getSessionAvailable() && 
         isDisconnectedOrReady && 
-        (wasConnected || isFirstStatusAfterPeerOpen) && // Allow reconnection if we were connected OR if this is first status after peer opens with tracked peers
+        (wasConnected || isFirstStatusAfterPeerOpen || isReconnectingAfterDisconnect) && // Allow reconnection if we were connected OR if this is first status after peer opens with tracked peers OR if reconnecting after disconnect
         !wasConnecting && // Don't trigger if we're coming from "Connecting..." state
         !reconnectionManager?.isReconnectingInProgress();
     
