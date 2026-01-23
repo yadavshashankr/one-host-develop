@@ -160,6 +160,9 @@ let previousConnectionStatus = '';
 // Track previous peer ID to detect when peer reconnects with same ID
 let previousPeerId = null;
 
+// Track if signaling server reconnection is in progress to prevent duplicate attempts
+let isReconnectingSignalingServer = false;
+
 // State
 let peer = null;
 let connections = new Map(); // Map to store multiple connections
@@ -612,6 +615,9 @@ function setupPeerHandlers() {
     peer.on('open', (id) => {
         console.log('Peer opened with ID:', id);
         
+        // Reset signaling server reconnection flag when peer opens
+        isReconnectingSignalingServer = false;
+        
         // Get fresh reference to peer ID element
         const peerIdElement = document.getElementById('peer-id');
         if (peerIdElement) {
@@ -736,6 +742,25 @@ function setupPeerHandlers() {
         }
         // No notification - status change will inform the user (if status was updated)
 
+        // For signaling server errors, immediately attempt to reconnect
+        // Don't wait for peer.on('disconnected') - reconnect right away
+        if (isSignalingServerError && !peer._isChangingId && peer && !peer.destroyed && !isReconnectingSignalingServer) {
+            // Show "Connecting..." status immediately
+            if (!hasActiveConnections) {
+                updateConnectionStatus('connecting', 'Connecting...');
+            }
+            // Set flag to prevent duplicate reconnection attempts
+            isReconnectingSignalingServer = true;
+            // Attempt reconnection immediately (no delay)
+            console.log('🔄 Signaling server error detected, attempting immediate reconnection...');
+            setTimeout(() => {
+                if (peer && !peer.destroyed && !peer._isChangingId) {
+                    console.log('Attempting to reconnect signaling server...');
+                    peer.reconnect();
+                }
+            }, 100); // Small delay to ensure error handling completes
+        }
+
         // If this was during a custom ID setup, revert to auto-generated ID
         if (elements.peerIdEdit && !elements.peerIdEdit.classList.contains('hidden')) {
             cancelEditingPeerId();
@@ -763,13 +788,20 @@ function setupPeerHandlers() {
         
         // Only try to reconnect signaling server if this is not a manual peer ID change
         // Reconnection will happen in background without disrupting active file transfers
-        if (!peer._isChangingId) {
+        // Note: Reconnection may have already been triggered in peer.on('error'), so check flag
+        if (!peer._isChangingId && peer && !peer.destroyed && !isReconnectingSignalingServer) {
+            // Show "Connecting..." status if no active connections
+            if (!hasActiveConnections) {
+                updateConnectionStatus('connecting', 'Connecting...');
+            }
+            // Set flag to prevent duplicate reconnection attempts
+            isReconnectingSignalingServer = true;
             setTimeout(() => {
-                if (peer && !peer.destroyed) {
+                if (peer && !peer.destroyed && !peer._isChangingId) {
                     console.log('Attempting to reconnect signaling server...');
                     peer.reconnect();
                 }
-            }, 3000);
+            }, 100); // Small delay to avoid duplicate reconnection attempts
         }
     });
 
