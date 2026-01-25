@@ -857,6 +857,26 @@ function initPeerJS() {
     }
 }
 
+// Broadcast our peer ID and connected-peer list to all connections (for full-mesh tracking).
+// Called when connections change (add/remove) so others can track and reconnect to 3+ peers.
+function broadcastPeerList() {
+    if (!peer || !peer.id || !connections || connections.size === 0) return;
+    const payload = {
+        type: MESSAGE_TYPES.CONNECTION_NOTIFICATION,
+        peerId: peer.id,
+        connectedPeerIds: Array.from(connections.keys())
+    };
+    for (const [peerId, c] of connections) {
+        if (c && c.open) {
+            try {
+                c.send(payload);
+            } catch (err) {
+                console.warn('Failed to broadcast peer list to', peerId, err);
+            }
+        }
+    }
+}
+
 // Setup connection event handlers
 function setupConnectionHandlers(conn, connectionTimeout = null) {
     conn.on('open', () => {
@@ -922,11 +942,8 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
             connectionTimeouts.delete(conn.peer);
         }
         
-        // Send a connection notification to the other peer
-        conn.send({
-            type: 'connection-notification',
-            peerId: peer.id
-        });
+        // Broadcast peer list to all connections (including this one) so 3+ peers are tracked
+        broadcastPeerList();
     });
 
     conn.on('data', async (data) => {
@@ -940,6 +957,21 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                     break;
                 case 'connection-notification':
                     updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+                    // Track sender and their connected peers for full-mesh reconnection (3+ devices)
+                    if (sessionStateManager && data.peerId) {
+                        if (data.peerId !== peer.id) {
+                            sessionStateManager.addTrackedPeer(data.peerId);
+                        }
+                        const ids = data.connectedPeerIds;
+                        if (Array.isArray(ids)) {
+                            const senderId = conn.peer;
+                            for (const id of ids) {
+                                if (id && id !== peer.id && id !== senderId) {
+                                    sessionStateManager.addTrackedPeer(id);
+                                }
+                            }
+                        }
+                    }
                     break;
                 case 'keep-alive':
                     // Handle keep-alive message
@@ -1020,7 +1052,7 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                     connections.delete(conn.peer);
                     updateConnectionStatus(connections.size > 0 ? 'connected' : '', 
                         connections.size > 0 ? `Connected to peer(s) : ${connections.size}` : 'Disconnected');
-                    // No notification - status change will inform the user
+                    broadcastPeerList();
                     break;
                 case MESSAGE_TYPES.FORCE_DISABLE_AUTO_MODE:
                     await handleForceDisableAutoMode(data, conn);
@@ -1206,6 +1238,7 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
             }
         } else {
             updateConnectionStatus('connected', `Connected to peer(s) : ${connections.size}`);
+            broadcastPeerList();
         }
     });
 }
