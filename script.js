@@ -1406,22 +1406,29 @@ async function handleFileComplete(data) {
     
     if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
-        pickerDownloadMap.delete(data.fileId);
-        try {
-            if (entry.receivedSize !== entry.fileSize) {
-                throw new Error('Received file size does not match expected size');
-            }
-            await entry.writable.close();
-            await finishPickerDownloadUI(data.fileId, entry);
-        } catch (err) {
-            console.error('Error completing picker download:', err);
-            showNotification('Error processing file: ' + err.message, 'error');
-            try { await entry.writable.close(); } catch (_) {}
-        } finally {
-            elements.transferProgress.classList.add('hidden');
-            updateProgress(0);
-            updateTransferInfo('');
+        if (entry.receivedSize !== entry.fileSize) {
+            // Grace period for late chunks (Android Chrome / mobile networks)
+            await new Promise(r => setTimeout(r, 300));
         }
+        if (entry.receivedSize !== entry.fileSize) {
+            pickerDownloadMap.delete(data.fileId);
+            try { await entry.writable.close(); } catch (_) {}
+            const missing = (entry.fileSize - entry.receivedSize) / 1024 | 0;
+            showNotification(`File incomplete (${missing} KB missing)`, 'error');
+        } else {
+            pickerDownloadMap.delete(data.fileId);
+            try {
+                await entry.writable.close();
+                await finishPickerDownloadUI(data.fileId, entry);
+            } catch (err) {
+                console.error('Error completing picker download:', err);
+                showNotification('Error processing file: ' + err.message, 'error');
+                try { await entry.writable.close(); } catch (_) {}
+            }
+        }
+        elements.transferProgress.classList.add('hidden');
+        updateProgress(0);
+        updateTransferInfo('');
         return;
     }
 
@@ -1656,10 +1663,17 @@ async function handleBlobRequest(data, conn) {
             timestamp: Date.now()
         });
 
-        // Send chunks
+        const threshold = window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 4 * 1024 * 1024;
+        const dc = conn.dataChannel ?? conn._channel ?? conn._dataChannel;
+
+        // Send chunks with backpressure (critical for Android Chrome - prevents last-chunk loss)
         while (offset < blob.size) {
             if (!conn.open) {
                 throw new Error('Connection lost during transfer');
+            }
+            if (dc && dc.bufferedAmount > threshold) {
+                await new Promise(r => setTimeout(r, 50));
+                continue;
             }
 
             const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
@@ -1679,6 +1693,14 @@ async function handleBlobRequest(data, conn) {
                 updateProgress(currentProgress, fileId);
                 lastProgressUpdate = currentProgress;
             }
+        }
+
+        // Wait for buffer to drain before file-complete (prevents race where last chunks are lost)
+        if (dc) {
+            while (dc.bufferedAmount > 0 && conn.open) {
+                await new Promise(r => setTimeout(r, 25));
+            }
+            await new Promise(r => setTimeout(r, 100));
         }
 
         // Send completion message
