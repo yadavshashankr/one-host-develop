@@ -31,6 +31,7 @@ const CONFIG = {
     CHUNK_SIZE: 16384,
     FILE_PICKER_SIZE_THRESHOLD: 400 * 1024 * 1024, // 400 MB - use showSaveFilePicker above this
     BUFFERED_AMOUNT_THRESHOLD: 4 * 1024 * 1024, // 4 MB - throttle sender when exceeded (Android Chrome)
+    BUFFER_DRAIN_THRESHOLD: 64 * 1024, // 64 KB - send file-complete when below (avoids long 99% stall)
     DB_NAME: 'fileTransferDB',
     DB_VERSION: 1,
     STORE_NAME: 'files',

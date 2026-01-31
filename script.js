@@ -1407,8 +1407,8 @@ async function handleFileComplete(data) {
     if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
         // Poll for completion: last chunk may still be writing (2nd+ file, disk busy)
-        for (let i = 0; i < 25 && entry.receivedSize !== entry.fileSize; i++) {
-            await new Promise(r => setTimeout(r, 100));
+        for (let i = 0; i < 40 && entry.receivedSize !== entry.fileSize; i++) {
+            await new Promise(r => setTimeout(r, 50));
         }
         if (entry.receivedSize !== entry.fileSize) {
             pickerDownloadMap.delete(data.fileId);
@@ -1695,12 +1695,13 @@ async function handleBlobRequest(data, conn) {
             }
         }
 
-        // Wait for buffer to drain before file-complete (prevents race where last chunks are lost)
+        // Wait for buffer to drain below threshold (avoids long 99% stall; 0 would take seconds on slow links)
+        const drainThreshold = window.CONFIG?.BUFFER_DRAIN_THRESHOLD ?? 64 * 1024;
         if (dc) {
-            while (dc.bufferedAmount > 0 && conn.open) {
+            while (dc.bufferedAmount > drainThreshold && conn.open) {
                 await new Promise(r => setTimeout(r, 25));
             }
-            await new Promise(r => setTimeout(r, 100));
+            await new Promise(r => setTimeout(r, 50));
         }
 
         // Send completion message
