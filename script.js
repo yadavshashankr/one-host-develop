@@ -1695,16 +1695,8 @@ async function handleBlobRequest(data, conn) {
             }
         }
 
-        // Wait for buffer to drain below threshold (avoids long 99% stall; 0 would take seconds on slow links)
-        const drainThreshold = window.CONFIG?.BUFFER_DRAIN_THRESHOLD ?? 64 * 1024;
-        if (dc) {
-            while (dc.bufferedAmount > drainThreshold && conn.open) {
-                await new Promise(r => setTimeout(r, 25));
-            }
-            await new Promise(r => setTimeout(r, 50));
-        }
-
-        // Send completion message
+        // Send file-complete immediately - WebRTC preserves message order, so it arrives after last chunk
+        // (no drain wait needed; was causing useless 99% stall)
         conn.send({
             type: 'file-complete',
             fileId: fileId,
