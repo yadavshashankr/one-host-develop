@@ -170,6 +170,7 @@ let db = null;
 let transferInProgress = false;
 let isConnectionReady = false;
 let fileChunks = {}; // Initialize fileChunks object
+const pickerDownloadMap = new Map(); // fileId -> { writable, fileName, fileType, fileSize, receivedSize, originalSender }
 let keepAliveInterval = null;
 let signalingServerKeepAliveInterval = null; // For Android-specific signaling server keep-alive
 let connectionTimeouts = new Map();
@@ -1103,7 +1104,11 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                         request.reject(new Error(data.error || 'Failed to download file'));
                         return;
                     }
-                    
+                    if (pickerDownloadMap.has(data.fileId)) {
+                        const entry = pickerDownloadMap.get(data.fileId);
+                        pickerDownloadMap.delete(data.fileId);
+                        try { await entry.writable.close(); } catch (_) {}
+                    }
                     showNotification(`Failed to download file: ${data.error}`, 'error');
                     elements.transferProgress.classList.add('hidden');
                     updateTransferInfo('');
@@ -1306,14 +1311,23 @@ async function handleFileHeader(data) {
         return; // Don't process as regular file download
     }
     
-    fileChunks[data.fileId] = {
-        chunks: [],
-        fileName: data.fileName,
-        fileType: data.fileType,
-        fileSize: data.fileSize,
-        receivedSize: 0,
-        originalSender: data.originalSender
-    };
+    if (pickerDownloadMap.has(data.fileId)) {
+        const entry = pickerDownloadMap.get(data.fileId);
+        entry.fileName = data.fileName;
+        entry.fileType = data.fileType;
+        entry.fileSize = data.fileSize;
+        entry.originalSender = data.originalSender;
+        entry.receivedSize = 0;
+    } else {
+        fileChunks[data.fileId] = {
+            chunks: [],
+            fileName: data.fileName,
+            fileType: data.fileType,
+            fileSize: data.fileSize,
+            receivedSize: 0,
+            originalSender: data.originalSender
+        };
+    }
     elements.transferProgress.classList.add('hidden'); // Always hide
     updateProgress(0);
     updateTransferInfo(`Receiving ${data.fileName} from ${data.originalSender}...`);
@@ -1329,6 +1343,26 @@ async function handleFileChunk(data) {
         return; // Don't process as regular file download
     }
     
+    if (pickerDownloadMap.has(data.fileId)) {
+        const entry = pickerDownloadMap.get(data.fileId);
+        try {
+            await entry.writable.write(data.data);
+        } catch (err) {
+            console.error('Error writing chunk to disk:', err);
+            showNotification('Error writing file to disk', 'error');
+            try { await entry.writable.close(); } catch (_) {}
+            pickerDownloadMap.delete(data.fileId);
+            return;
+        }
+        entry.receivedSize += data.data.byteLength;
+        const currentProgress = (entry.receivedSize / entry.fileSize) * 100;
+        if (!entry.lastProgressUpdate || currentProgress - entry.lastProgressUpdate >= 1) {
+            updateProgress(currentProgress, data.fileId);
+            entry.lastProgressUpdate = currentProgress;
+        }
+        return;
+    }
+
     const fileData = fileChunks[data.fileId];
     if (!fileData) return;
 
@@ -1370,6 +1404,27 @@ async function handleFileComplete(data) {
         return; // Don't process as regular file download
     }
     
+    if (pickerDownloadMap.has(data.fileId)) {
+        const entry = pickerDownloadMap.get(data.fileId);
+        pickerDownloadMap.delete(data.fileId);
+        try {
+            if (entry.receivedSize !== entry.fileSize) {
+                throw new Error('Received file size does not match expected size');
+            }
+            await entry.writable.close();
+            await finishPickerDownloadUI(data.fileId, entry);
+        } catch (err) {
+            console.error('Error completing picker download:', err);
+            showNotification('Error processing file: ' + err.message, 'error');
+            try { await entry.writable.close(); } catch (_) {}
+        } finally {
+            elements.transferProgress.classList.add('hidden');
+            updateProgress(0);
+            updateTransferInfo('');
+        }
+        return;
+    }
+
     const fileData = fileChunks[data.fileId];
     if (!fileData) return;
 
@@ -1466,6 +1521,50 @@ async function handleFileComplete(data) {
         elements.transferProgress.classList.add('hidden'); // Ensure it's hidden
         updateProgress(0);
         updateTransferInfo('');
+    }
+}
+
+async function finishPickerDownloadUI(fileId, meta) {
+    if (bulkDownloadProgress.isBulkDownload && bulkDownloadProgress.total > 0) {
+        bulkDownloadProgress.completed++;
+        showOrUpdateProgressNotification('downloading', bulkDownloadProgress.completed, bulkDownloadProgress.total, 'downloading');
+    } else {
+        showNotification(`Downloaded ${meta.fileName}`, 'success');
+    }
+    Analytics.track('file_downloaded_successfully', {
+        file_size: meta.fileSize,
+        file_type: Analytics.getFileExtension(meta.fileName),
+        file_size_category: Analytics.getFileSizeCategory(meta.fileSize),
+        device_type: Analytics.getDeviceType()
+    });
+    const listItem = document.querySelector(`[data-file-id="${fileId}"]`);
+    if (listItem) {
+        listItem.classList.add('download-completed');
+        const downloadButton = listItem.querySelector('.icon-button');
+        if (downloadButton) {
+            downloadButton.disabled = false;
+            downloadButton.classList.add('download-completed');
+            downloadButton.innerHTML = '<span class="material-icons" translate="no">open_in_new</span>';
+            downloadButton.title = 'Open file';
+            downloadProgressMap.delete(fileId);
+            if (completedFileBlobURLs.has(fileId)) {
+                const v = completedFileBlobURLs.get(fileId);
+                if (typeof v === 'string') { URL.revokeObjectURL(v); activeBlobURLs.delete(v); }
+                completedFileBlobURLs.delete(fileId);
+            }
+            completedFileBlobURLs.set(fileId, true);
+            downloadButton.onclick = () => {
+                Analytics.track('file_open_clicked', { file_size: meta.fileSize, file_type: Analytics.getFileExtension(meta.fileName), device_type: Analytics.getDeviceType() });
+                showNotification('Please check your saved file location', 'info');
+            };
+        }
+        updateBulkDownloadButtonState();
+    }
+    const fileInfo = { name: meta.fileName, type: meta.fileType, size: meta.fileSize, id: fileId, sharedBy: meta.originalSender };
+    if (!fileHistory.sent.has(fileId) && !fileHistory.received.has(fileId)) {
+        receivedFileInfoMap.set(fileId, fileInfo);
+        addFileToHistory(fileInfo, 'received');
+        if (connections.size > 1) await forwardFileInfoToPeers(fileInfo, fileId);
     }
 }
 
@@ -1681,9 +1780,41 @@ async function requestBlobFromPeer(fileInfo) {
     });
 }
 
+function supportsShowSaveFilePicker() {
+    return typeof window.showSaveFilePicker === 'function';
+}
+
 // Function to request and download a blob
 async function requestAndDownloadBlob(fileInfo) {
     try {
+        const threshold = window.CONFIG?.FILE_PICKER_SIZE_THRESHOLD ?? 400 * 1024 * 1024;
+        const usePicker = supportsShowSaveFilePicker() && (fileInfo.size || 0) > threshold;
+
+        let fileHandle = null;
+        let writable = null;
+        if (usePicker) {
+            try {
+                fileHandle = await window.showSaveFilePicker({ suggestedName: fileInfo.name });
+                writable = await fileHandle.createWritable();
+                pickerDownloadMap.set(fileInfo.id, {
+                    writable,
+                    fileName: fileInfo.name,
+                    fileType: fileInfo.type || 'application/octet-stream',
+                    fileSize: fileInfo.size,
+                    receivedSize: 0,
+                    originalSender: fileInfo.sharedBy,
+                    lastProgressUpdate: 0
+                });
+            } catch (pickerErr) {
+                if (pickerErr.name === 'AbortError') {
+                    showNotification('Download cancelled', 'info');
+                    return;
+                }
+                console.warn('showSaveFilePicker failed, falling back to blob download:', pickerErr);
+                writable = null;
+            }
+        }
+
         // Always try to connect to original sender directly
         let conn = connections.get(fileInfo.sharedBy);
         
@@ -4741,9 +4872,13 @@ function handleBeforeUnload(event) {
     console.log(`🧹 Clearing ${sentFileBlobs.size} sent file blob(s)...`);
     sentFileBlobs.clear();
     
-    // Clear file chunks
+    // Clear file chunks and abort any active picker downloads
     console.log(`🧹 Clearing file chunks...`);
     fileChunks = {};
+    for (const [fileId, entry] of pickerDownloadMap) {
+        try { entry.writable.close(); } catch (_) {}
+    }
+    pickerDownloadMap.clear();
 }
 
 // Send keep-alive messages to all connected peers

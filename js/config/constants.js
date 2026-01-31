@@ -29,6 +29,7 @@ const CONFIG = {
     IS_DEVELOPMENT: CURRENT_ENVIRONMENT === 'development',
     // Other constants
     CHUNK_SIZE: 16384,
+    FILE_PICKER_SIZE_THRESHOLD: 400 * 1024 * 1024, // 400 MB - use showSaveFilePicker above this
     DB_NAME: 'fileTransferDB',
     DB_VERSION: 1,
     STORE_NAME: 'files',
