@@ -1406,14 +1406,14 @@ async function handleFileComplete(data) {
     
     if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
-        if (entry.receivedSize !== entry.fileSize) {
-            // Grace period for late chunks (Android Chrome / mobile networks)
-            await new Promise(r => setTimeout(r, 300));
+        // Poll for completion: last chunk may still be writing (2nd+ file, disk busy)
+        for (let i = 0; i < 25 && entry.receivedSize !== entry.fileSize; i++) {
+            await new Promise(r => setTimeout(r, 100));
         }
         if (entry.receivedSize !== entry.fileSize) {
             pickerDownloadMap.delete(data.fileId);
             try { await entry.writable.close(); } catch (_) {}
-            const missing = (entry.fileSize - entry.receivedSize) / 1024 | 0;
+            const missing = Math.max(1, (entry.fileSize - entry.receivedSize) / 1024 | 0);
             showNotification(`File incomplete (${missing} KB missing)`, 'error');
         } else {
             pickerDownloadMap.delete(data.fileId);
