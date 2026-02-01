@@ -1714,23 +1714,9 @@ async function handleBlobRequest(data, conn) {
             timestamp: Date.now()
         });
 
-        const threshold = window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 4 * 1024 * 1024;
-        const dc = conn.dataChannel ?? conn._channel ?? conn._dataChannel;
-        let throttleCount = 0;
-        let last99Log = 0;
-
         while (offset < fileSize) {
             if (!conn.open) {
                 throw new Error('Connection lost during transfer');
-            }
-            if (dc && dc.bufferedAmount > threshold) {
-                throttleCount++;
-                if ((offset / fileSize) * 100 >= 99 && throttleCount - last99Log >= 50) {
-                    last99Log = throttleCount;
-                    console.log(`[99→100 TX] throttling bufferedAmount=${dc.bufferedAmount} offset=${offset} total=${fileSize} throttleCount=${throttleCount}`);
-                }
-                await new Promise(r => setTimeout(r, 50));
-                continue;
             }
 
             let chunk;
@@ -1754,7 +1740,7 @@ async function handleBlobRequest(data, conn) {
 
             const currentProgress = (offset / fileSize) * 100;
             if (currentProgress >= 99 && offset === fileSize) {
-                console.log(`[99→100 TX] last chunk sent offset=${offset} fileSize=${fileSize} totalThrottles=${throttleCount}`);
+                console.log(`[99→100 TX] last chunk sent offset=${offset} fileSize=${fileSize}`);
             }
             if (currentProgress - lastProgressUpdate >= 1) {
                 updateProgress(currentProgress, fileId);
@@ -1762,7 +1748,7 @@ async function handleBlobRequest(data, conn) {
             }
         }
 
-        console.log(`[99→100 TX] sending file-complete totalThrottles=${throttleCount}`);
+        console.log(`[99→100 TX] sending file-complete`);
         conn.send({
             type: 'file-complete',
             fileId: fileId,
