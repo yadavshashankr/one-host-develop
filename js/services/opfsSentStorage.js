@@ -47,8 +47,7 @@
                 _meta.set(fileId, { type: file.type || 'application/octet-stream' });
                 const handle = await root.getFileHandle(safeName, { create: true });
                 const writable = await handle.createWritable();
-                await file.stream().pipeTo(writable);
-                await writable.close();
+                await file.stream().pipeTo(writable); // pipeTo closes the writable when done
                 return true;
             } catch (e) {
                 console.warn('[OPFS] Save failed, falling back to blob:', e);
