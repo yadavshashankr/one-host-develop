@@ -1852,6 +1852,48 @@ function supportsShowSaveFilePicker() {
     return typeof window.showSaveFilePicker === 'function';
 }
 
+// File System Access API: grants persistent read permission (avoids NotReadableError when picker blurs page)
+function supportsOpenFilePicker() {
+    return typeof window.showOpenFilePicker === 'function';
+}
+
+// Open files via showOpenFilePicker - permission persists after picker closes (fixes NotReadableError)
+async function openFilesWithPicker() {
+    const handles = await window.showOpenFilePicker({ multiple: true });
+    if (handles.length > 1) {
+        showNotification(`Processing ${handles.length} files`, 'info');
+    }
+    const added = [];
+    for (const handle of handles) {
+        try {
+            const file = await handle.getFile(); // Permission persists - handle-based, not page-focus
+            const prepared = await prepareFileForSend(file);
+            fileQueue.push(prepared);
+            added.push(prepared);
+        } catch (err) {
+            console.error('Prepare file error:', err);
+            const name = handle.name || 'File';
+            showNotification(`${name}: ${err.message}`, 'error');
+        }
+    }
+    if (added.length > 0) {
+        const fileStats = added.map(p => ({
+            size: p.size,
+            type: Analytics.getFileExtension(p.name),
+            sizeCategory: Analytics.getFileSizeCategory(p.size)
+        }));
+        Analytics.track('files_selected_for_upload', {
+            file_count: added.length,
+            total_size: fileStats.reduce((sum, f) => sum + f.size, 0),
+            file_types: [...new Set(fileStats.map(f => f.type))].join(','),
+            size_categories: [...new Set(fileStats.map(f => f.sizeCategory))].join(','),
+            connected_peers: connections.size,
+            picker: 'open_file_picker'
+        });
+        processFileQueue();
+    }
+}
+
 // Function to request and download a blob
 async function requestAndDownloadBlob(fileInfo) {
     try {
@@ -3452,17 +3494,25 @@ elements.dropZone.addEventListener('drop', async (e) => {
 
 // Add click handler for the drop zone
 elements.dropZone.addEventListener('click', () => {
-    // Track file upload icon click
     Analytics.track('file_upload_icon_clicked', {
         connected_peers: connections.size,
         device_type: Analytics.getDeviceType()
     });
     
-    if (connections.size > 0) {
-        elements.fileInput.click();
-    } else {
+    if (connections.size === 0) {
         showNotification('Please connect to at least one peer first', 'error');
         Analytics.track('file_upload_blocked_no_connection');
+        return;
+    }
+    // Use showOpenFilePicker when available - grants persistent permission, avoids NotReadableError when picker blurs page
+    if (supportsOpenFilePicker()) {
+        openFilesWithPicker().catch(err => {
+            if (err.name === 'AbortError') return; // User cancelled
+            console.error('Open file picker error:', err);
+            showNotification(err.message || 'Failed to open file picker', 'error');
+        });
+    } else {
+        elements.fileInput.click();
     }
 });
 
