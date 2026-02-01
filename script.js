@@ -1651,7 +1651,8 @@ async function forwardFileInfoToPeers(fileInfo, fileId) {
 }
 
 // Send file to a specific peer (file stored in OpfsSentStorage or blob fallback)
-async function sendFileToPeer(file, conn, fileId) {
+// prepared: { fileId, name, type, size }
+async function sendFileToPeer(prepared, conn, fileId) {
     try {
         if (!conn.open) {
             throw new Error('Connection is not open');
@@ -1661,9 +1662,9 @@ async function sendFileToPeer(file, conn, fileId) {
         conn.send({
             type: 'file-info',
             fileId: fileId,
-            fileName: file.name,
-            fileType: file.type,
-            fileSize: file.size,
+            fileName: prepared.name,
+            fileType: prepared.type,
+            fileSize: prepared.size,
             originalSender: peer.id
         });
 
@@ -2583,42 +2584,62 @@ async function processFileQueue() {
     updateTransferInfo('');
 }
 
-// Modify sendFile function to work with queue
-async function sendFile(file) {
+// Prepare file for send: read into OPFS/blob immediately (avoids NotReadableError when tab is blurred).
+async function prepareFileForSend(file) {
+    const fileId = generateFileId(file);
+    if (window.OpfsSentStorage) {
+        await window.OpfsSentStorage.set(fileId, file);
+    } else {
+        const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
+        sentFileBlobs.set(fileId, fileBlob);
+    }
+    return { fileId, name: file.name, type: file.type, size: file.size };
+}
+
+// Modify sendFile function to work with queue (accepts prepared { fileId, name, type, size })
+async function sendFile(preparedOrFile) {
     if (connections.size === 0) {
         showNotification('Please connect to at least one peer first', 'error');
         return;
     }
 
     if (transferInProgress) {
-        // Add to queue instead of showing warning
-        fileQueue.push(file);
-        showNotification(`${file.name} added to queue`, 'info');
+        const file = preparedOrFile;
+        if (!file || typeof file.arrayBuffer !== 'function') {
+            showNotification('Invalid file', 'error');
+            return;
+        }
+        prepareFileForSend(file).then(prepared => {
+            fileQueue.push(prepared);
+            showNotification(`${file.name} added to queue`, 'info');
+            processFileQueue();
+        }).catch(err => {
+            console.error('Prepare file error:', err);
+            const msg = err.name === 'NotReadableError'
+                ? 'File access lost. Select the file again and keep this tab active during upload.'
+                : err.message;
+            showNotification(msg, 'error');
+        });
         return;
     }
+
+    const prepared = preparedOrFile;
+    const fileName = prepared.name;
+    const fileId = prepared.fileId;
+    const fileType = prepared.type;
+    const fileSize = prepared.size;
 
     try {
         transferInProgress = true;
         elements.transferProgress.classList.add('hidden'); // Always hide
         updateProgress(0);
-        updateTransferInfo(`Sending ${file.name}...`);
+        updateTransferInfo(`Sending ${fileName}...`);
 
-        // Generate a unique file ID that will be same for all recipients
-        const fileId = generateFileId(file);
-        
-        // Stream to OPFS when available (avoids full-file in memory), else fallback to Blob
-        if (window.OpfsSentStorage) {
-            await window.OpfsSentStorage.set(fileId, file);
-        } else {
-            const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
-            sentFileBlobs.set(fileId, fileBlob);
-        }
-        
-        // Add to sender's history first
+        // Add to sender's history first (data already in OpfsSentStorage or sentFileBlobs)
         const fileInfo = {
-            name: file.name,
-            type: file.type,
-            size: file.size,
+            name: fileName,
+            type: fileType,
+            size: fileSize,
             id: fileId,
             sharedBy: peer.id
         };
@@ -2631,7 +2652,7 @@ async function sendFile(file) {
         for (const [peerId, conn] of connections) {
             if (conn && conn.open) {
                 try {
-                    await sendFileToPeer(file, conn, fileId);
+                    await sendFileToPeer(prepared, conn, fileId);
                     successCount++;
                 } catch (error) {
                     errors.push(error.message);
@@ -2642,14 +2663,14 @@ async function sendFile(file) {
         if (successCount > 0) {
             // Only show individual notification if not processing queue (single file send)
             if (!isProcessingQueue) {
-                showNotification(`${file.name} sent successfully`, 'success');
+                showNotification(`${fileName} sent successfully`, 'success');
             }
             
             // Track successful file send
             Analytics.track('file_sent_successfully', {
-                file_size: file.size,
-                file_type: Analytics.getFileExtension(file.name),
-                file_size_category: Analytics.getFileSizeCategory(file.size),
+                file_size: fileSize,
+                file_type: Analytics.getFileExtension(fileName),
+                file_size_category: Analytics.getFileSizeCategory(fileSize),
                 recipients_count: successCount,
                 total_connected_peers: connections.size,
                 device_type: Analytics.getDeviceType()
@@ -2659,13 +2680,16 @@ async function sendFile(file) {
         }
     } catch (error) {
         console.error('File send error:', error);
-        showNotification(error.message, 'error');
+        const msg = error.name === 'NotReadableError'
+            ? 'File access lost. Select the file again and keep this tab active during upload.'
+            : error.message;
+        showNotification(msg, 'error');
         
         // Track file send failure
         Analytics.track('file_send_failed', {
-            file_size: file.size,
-            file_type: Analytics.getFileExtension(file.name),
-            file_size_category: Analytics.getFileSizeCategory(file.size),
+            file_size: fileSize,
+            file_type: Analytics.getFileExtension(fileName),
+            file_size_category: Analytics.getFileSizeCategory(fileSize),
             error_message: error.message,
             connected_peers: connections.size,
             device_type: Analytics.getDeviceType()
@@ -3399,7 +3423,7 @@ elements.dropZone.addEventListener('dragleave', () => {
     elements.dropZone.classList.remove('drag-over');
 });
 
-elements.dropZone.addEventListener('drop', (e) => {
+elements.dropZone.addEventListener('drop', async (e) => {
     e.preventDefault();
     elements.dropZone.classList.remove('drag-over');
     
@@ -3408,9 +3432,18 @@ elements.dropZone.addEventListener('drop', (e) => {
         if (files.length > 1) {
             showNotification(`Processing ${files.length} files`, 'info');
         }
-        Array.from(files).forEach(file => {
-            fileQueue.push(file);
-        });
+        for (const file of Array.from(files)) {
+            try {
+                const prepared = await prepareFileForSend(file);
+                fileQueue.push(prepared);
+            } catch (err) {
+                console.error('Prepare file error:', err);
+                const msg = err.name === 'NotReadableError'
+                    ? 'File access lost. Select again and keep tab active.'
+                    : err.message;
+                showNotification(`${file.name}: ${msg}`, 'error');
+            }
+        }
         processFileQueue();
     } else {
         showNotification('Please connect to at least one peer first', 'error');
@@ -3433,8 +3466,8 @@ elements.dropZone.addEventListener('click', () => {
     }
 });
 
-// Update file input change handler
-elements.fileInput.addEventListener('change', (e) => {
+// Update file input change handler - read files immediately to avoid NotReadableError
+elements.fileInput.addEventListener('change', async (e) => {
     if (connections.size > 0) {
         const files = e.target.files;
         if (files.length > 0) {
@@ -3456,9 +3489,19 @@ elements.fileInput.addEventListener('change', (e) => {
             if (files.length > 1) {
                 showNotification(`Processing ${files.length} files`, 'info');
             }
-            Array.from(files).forEach(file => {
-                fileQueue.push(file);
-            });
+            // Read into storage immediately (before permission can be revoked)
+            for (const file of Array.from(files)) {
+                try {
+                    const prepared = await prepareFileForSend(file);
+                    fileQueue.push(prepared);
+                } catch (err) {
+                    console.error('Prepare file error:', err);
+                    const msg = err.name === 'NotReadableError'
+                        ? 'File access lost. Select again and keep tab active.'
+                        : err.message;
+                    showNotification(`${file.name}: ${msg}`, 'error');
+                }
+            }
             processFileQueue();
         }
         // Reset the input so the same file can be selected again
