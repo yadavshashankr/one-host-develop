@@ -1345,16 +1345,34 @@ async function handleFileChunk(data) {
     
     if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
-        try {
-            await entry.writable.write(data.data);
-        } catch (err) {
-            console.error('Error writing chunk to disk:', err);
-            showNotification('Error writing file to disk', 'error');
-            try { await entry.writable.close(); } catch (_) {}
-            pickerDownloadMap.delete(data.fileId);
-            return;
+        const chunk = data.data;
+        const WRITE_BATCH = 65536; // 64 KB - batch writes to reduce 99% stall
+        if (!entry.writeBuf) entry.writeBuf = [];
+        if (!entry.writeBufSize) entry.writeBufSize = 0;
+        entry.writeBuf.push(chunk);
+        entry.writeBufSize += chunk.byteLength;
+        if (entry.writeBufSize >= WRITE_BATCH || entry.receivedSize + chunk.byteLength >= entry.fileSize) {
+            const toWrite = entry.writeBuf.length === 1 ? entry.writeBuf[0] : new Uint8Array(entry.writeBuf.reduce((s, c) => s + c.byteLength, 0));
+            if (entry.writeBuf.length > 1) {
+                let off = 0;
+                for (const c of entry.writeBuf) {
+                    toWrite.set(new Uint8Array(c), off);
+                    off += c.byteLength;
+                }
+            }
+            entry.writeBuf = [];
+            entry.writeBufSize = 0;
+            try {
+                await entry.writable.write(toWrite);
+            } catch (err) {
+                console.error('Error writing chunk to disk:', err);
+                showNotification('Error writing file to disk', 'error');
+                try { await entry.writable.close(); } catch (_) {}
+                pickerDownloadMap.delete(data.fileId);
+                return;
+            }
         }
-        entry.receivedSize += data.data.byteLength;
+        entry.receivedSize += chunk.byteLength;
         const currentProgress = (entry.receivedSize / entry.fileSize) * 100;
         if (!entry.lastProgressUpdate || currentProgress - entry.lastProgressUpdate >= 1) {
             updateProgress(currentProgress, data.fileId);
@@ -1406,6 +1424,22 @@ async function handleFileComplete(data) {
     
     if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
+        // Flush any buffered writes
+        if (entry.writeBuf && entry.writeBuf.length > 0) {
+            try {
+                const toWrite = entry.writeBuf.length === 1 ? entry.writeBuf[0] : new Uint8Array(entry.writeBuf.reduce((s, c) => s + c.byteLength, 0));
+                if (entry.writeBuf.length > 1) {
+                    let off = 0;
+                    for (const c of entry.writeBuf) {
+                        toWrite.set(new Uint8Array(c), off);
+                        off += c.byteLength;
+                    }
+                }
+                await entry.writable.write(toWrite);
+            } catch (_) {}
+            entry.writeBuf = [];
+            entry.writeBufSize = 0;
+        }
         // Poll for completion: last chunk may still be writing (2nd+ file, disk busy)
         for (let i = 0; i < 40 && entry.receivedSize !== entry.fileSize; i++) {
             await new Promise(r => setTimeout(r, 50));

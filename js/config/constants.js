@@ -28,9 +28,9 @@ const CONFIG = {
     IS_PRODUCTION: CURRENT_ENVIRONMENT === 'production',
     IS_DEVELOPMENT: CURRENT_ENVIRONMENT === 'development',
     // Other constants
-    CHUNK_SIZE: 16384,
+    CHUNK_SIZE: 32768, // 32 KB - fewer chunks = faster 99→100% (was 16KB)
     FILE_PICKER_SIZE_THRESHOLD: 400 * 1024 * 1024, // 400 MB - use showSaveFilePicker above this
-    BUFFERED_AMOUNT_THRESHOLD: 4 * 1024 * 1024, // 4 MB - throttle sender when exceeded (Android Chrome)
+    BUFFERED_AMOUNT_THRESHOLD: 2 * 1024 * 1024, // 2 MB - lower = less 99% stall (was 4MB)
     DB_NAME: 'fileTransferDB',
     DB_VERSION: 1,
     STORE_NAME: 'files',
