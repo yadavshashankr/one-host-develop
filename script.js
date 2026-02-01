@@ -1860,9 +1860,9 @@ function supportsOpenFilePicker() {
 // Open files via showOpenFilePicker - permission persists after picker closes (fixes NotReadableError)
 async function openFilesWithPicker() {
     const handles = await window.showOpenFilePicker({ multiple: true });
-    if (handles.length > 1) {
-        showNotification(`Processing ${handles.length} files`, 'info');
-    }
+    // Show notification immediately when picker closes (before preparing files)
+    showOrUpdateProgressNotification('sending', 0, handles.length, 'sending');
+    updateTransferInfo(`Processing queue: ${handles.length} file(s) remaining`);
     const added = [];
     for (const handle of handles) {
         try {
@@ -3471,9 +3471,9 @@ elements.dropZone.addEventListener('drop', async (e) => {
     
     if (connections.size > 0) {
         const files = e.dataTransfer.files;
-        if (files.length > 1) {
-            showNotification(`Processing ${files.length} files`, 'info');
-        }
+        // Show notification immediately when files are dropped (before preparing)
+        showOrUpdateProgressNotification('sending', 0, files.length, 'sending');
+        updateTransferInfo(`Processing queue: ${files.length} file(s) remaining`);
         for (const file of Array.from(files)) {
             try {
                 const prepared = await prepareFileForSend(file);
@@ -3535,10 +3535,9 @@ elements.fileInput.addEventListener('change', async (e) => {
                 size_categories: [...new Set(fileStats.map(f => f.sizeCategory))].join(','),
                 connected_peers: connections.size
             });
-            
-            if (files.length > 1) {
-                showNotification(`Processing ${files.length} files`, 'info');
-            }
+            // Show notification immediately when files are selected (before preparing)
+            showOrUpdateProgressNotification('sending', 0, files.length, 'sending');
+            updateTransferInfo(`Processing queue: ${files.length} file(s) remaining`);
             // Read into storage immediately (before permission can be revoked)
             for (const file of Array.from(files)) {
                 try {
