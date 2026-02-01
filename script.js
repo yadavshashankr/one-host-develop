@@ -1374,6 +1374,12 @@ async function handleFileChunk(data) {
         }
         entry.receivedSize += chunk.byteLength;
         const currentProgress = (entry.receivedSize / entry.fileSize) * 100;
+        if (currentProgress >= 99 && (!entry._last99Log || Date.now() - entry._last99Log > 500)) {
+            entry._last99Log = Date.now();
+            const rem = entry.fileSize - entry.receivedSize;
+            const didWrite = entry.writeBufSize === 0;
+            console.log(`[99→100 RX] progress=${currentProgress.toFixed(2)}% received=${entry.receivedSize} total=${entry.fileSize} remaining=${rem} wroteBatch=${didWrite}`);
+        }
         if (!entry.lastProgressUpdate || currentProgress - entry.lastProgressUpdate >= 1) {
             updateProgress(currentProgress, data.fileId);
             entry.lastProgressUpdate = currentProgress;
@@ -1424,8 +1430,11 @@ async function handleFileComplete(data) {
     
     if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
+        const t0 = performance.now();
+        console.log(`[99→100 COMPLETE] file-complete received receivedSize=${entry.receivedSize} fileSize=${entry.fileSize} diff=${entry.fileSize - entry.receivedSize}`);
         // Flush any buffered writes
         if (entry.writeBuf && entry.writeBuf.length > 0) {
+            const tFlush = performance.now();
             try {
                 const toWrite = entry.writeBuf.length === 1 ? entry.writeBuf[0] : new Uint8Array(entry.writeBuf.reduce((s, c) => s + c.byteLength, 0));
                 if (entry.writeBuf.length > 1) {
@@ -1439,11 +1448,16 @@ async function handleFileComplete(data) {
             } catch (_) {}
             entry.writeBuf = [];
             entry.writeBufSize = 0;
+            console.log(`[99→100 COMPLETE] flush took ${(performance.now() - tFlush).toFixed(0)}ms`);
         }
         // Poll for completion: last chunk may still be writing (2nd+ file, disk busy)
+        let pollCount = 0;
         for (let i = 0; i < 40 && entry.receivedSize !== entry.fileSize; i++) {
+            pollCount++;
             await new Promise(r => setTimeout(r, 50));
         }
+        if (pollCount > 0) console.log(`[99→100 COMPLETE] polled ${pollCount}×50ms receivedSize=${entry.receivedSize} fileSize=${entry.fileSize}`);
+        console.log(`[99→100 COMPLETE] total handleFileComplete took ${(performance.now() - t0).toFixed(0)}ms`);
         if (entry.receivedSize !== entry.fileSize) {
             pickerDownloadMap.delete(data.fileId);
             try { await entry.writable.close(); } catch (_) {}
@@ -1702,12 +1716,19 @@ async function handleBlobRequest(data, conn) {
 
         const threshold = window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 4 * 1024 * 1024;
         const dc = conn.dataChannel ?? conn._channel ?? conn._dataChannel;
+        let throttleCount = 0;
+        let last99Log = 0;
 
         while (offset < fileSize) {
             if (!conn.open) {
                 throw new Error('Connection lost during transfer');
             }
             if (dc && dc.bufferedAmount > threshold) {
+                throttleCount++;
+                if ((offset / fileSize) * 100 >= 99 && throttleCount - last99Log >= 50) {
+                    last99Log = throttleCount;
+                    console.log(`[99→100 TX] throttling bufferedAmount=${dc.bufferedAmount} offset=${offset} total=${fileSize} throttleCount=${throttleCount}`);
+                }
                 await new Promise(r => setTimeout(r, 50));
                 continue;
             }
@@ -1732,12 +1753,16 @@ async function handleBlobRequest(data, conn) {
             offset += chunk.byteLength;
 
             const currentProgress = (offset / fileSize) * 100;
+            if (currentProgress >= 99 && offset === fileSize) {
+                console.log(`[99→100 TX] last chunk sent offset=${offset} fileSize=${fileSize} totalThrottles=${throttleCount}`);
+            }
             if (currentProgress - lastProgressUpdate >= 1) {
                 updateProgress(currentProgress, fileId);
                 lastProgressUpdate = currentProgress;
             }
         }
 
+        console.log(`[99→100 TX] sending file-complete totalThrottles=${throttleCount}`);
         conn.send({
             type: 'file-complete',
             fileId: fileId,
