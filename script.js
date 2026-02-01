@@ -209,7 +209,7 @@ let previousFirstReceivedPeer = null;
 const changedGroups = new Set();
 
 // Add blob storage for sent files
-const sentFileBlobs = new Map(); // Map to store blobs of sent files
+const sentFileBlobs = new Map(); // Fallback when OpfsSentStorage not loaded; otherwise OpfsSentStorage holds files
 
 // Track all blob URLs for cleanup
 const activeBlobURLs = new Set(); // Set to track all created blob URLs
@@ -1602,17 +1602,14 @@ async function forwardFileInfoToPeers(fileInfo, fileId) {
     }
 }
 
-// Send file to a specific peer
-async function sendFileToPeer(file, conn, fileId, fileBlob) {
+// Send file to a specific peer (file stored in OpfsSentStorage or blob fallback)
+async function sendFileToPeer(file, conn, fileId) {
     try {
         if (!conn.open) {
             throw new Error('Connection is not open');
         }
 
-        // Store the blob for later use
-        sentFileBlobs.set(fileId, fileBlob);
-
-        // Send file info only
+        // Send file info only (actual bytes in OpfsSentStorage, streamed on blob-request)
         conn.send({
             type: 'file-info',
             fileId: fileId,
@@ -1634,10 +1631,11 @@ async function handleBlobRequest(data, conn) {
     const { fileId, forwardTo } = data;
     console.log('Received blob request for file:', fileId);
 
-    // Check if we have the blob
-    const blob = sentFileBlobs.get(fileId);
-    if (!blob) {
-        console.error('Blob not found for file:', fileId);
+    const storage = window.OpfsSentStorage;
+    const blobFallback = sentFileBlobs.get(fileId);
+    const hasFile = storage ? await storage.hasAsync(fileId) : !!blobFallback;
+    if (!hasFile) {
+        console.error('File not found for file:', fileId);
         conn.send({
             type: 'blob-error',
             fileId: fileId,
@@ -1646,19 +1644,24 @@ async function handleBlobRequest(data, conn) {
         return;
     }
 
+    const fileSize = storage ? await storage.getSize(fileId) : blobFallback.size;
+    const fileType = storage ? storage.getType(fileId) : blobFallback.type;
+
     try {
-        // Convert blob to array buffer
-        const buffer = await blob.arrayBuffer();
+        let buffer = null;
+        if (blobFallback) {
+            buffer = await blobFallback.arrayBuffer();
+        }
+
         let offset = 0;
         let lastProgressUpdate = 0;
 
-        // Send file header
         conn.send({
             type: 'file-header',
             fileId: fileId,
             fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
+            fileType: fileType,
+            fileSize: fileSize,
             originalSender: peer.id,
             timestamp: Date.now()
         });
@@ -1666,8 +1669,7 @@ async function handleBlobRequest(data, conn) {
         const threshold = window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 4 * 1024 * 1024;
         const dc = conn.dataChannel ?? conn._channel ?? conn._dataChannel;
 
-        // Send chunks with backpressure (critical for Android Chrome - prevents last-chunk loss)
-        while (offset < blob.size) {
+        while (offset < fileSize) {
             if (!conn.open) {
                 throw new Error('Connection lost during transfer');
             }
@@ -1676,33 +1678,38 @@ async function handleBlobRequest(data, conn) {
                 continue;
             }
 
-            const chunk = buffer.slice(offset, offset + CHUNK_SIZE);
+            let chunk;
+            if (buffer) {
+                chunk = buffer.slice(offset, offset + CHUNK_SIZE);
+            } else {
+                const len = Math.min(CHUNK_SIZE, fileSize - offset);
+                chunk = await storage.getChunk(fileId, offset, len);
+                if (!chunk) throw new Error('Failed to read chunk from storage');
+            }
+
             conn.send({
                 type: 'file-chunk',
                 fileId: fileId,
                 data: chunk,
                 offset: offset,
-                total: blob.size
+                total: fileSize
             });
 
             offset += chunk.byteLength;
 
-            // Update progress
-            const currentProgress = (offset / blob.size) * 100;
+            const currentProgress = (offset / fileSize) * 100;
             if (currentProgress - lastProgressUpdate >= 1) {
                 updateProgress(currentProgress, fileId);
                 lastProgressUpdate = currentProgress;
             }
         }
 
-        // Send file-complete immediately - WebRTC preserves message order, so it arrives after last chunk
-        // (no drain wait needed; was causing useless 99% stall)
         conn.send({
             type: 'file-complete',
             fileId: fileId,
             fileName: data.fileName,
-            fileType: blob.type,
-            fileSize: blob.size,
+            fileType: fileType,
+            fileSize: fileSize,
             timestamp: Date.now()
         });
 
@@ -2554,8 +2561,13 @@ async function sendFile(file) {
         // Generate a unique file ID that will be same for all recipients
         const fileId = generateFileId(file);
         
-        // Create file blob once for the sender
-        const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
+        // Stream to OPFS when available (avoids full-file in memory), else fallback to Blob
+        if (window.OpfsSentStorage) {
+            await window.OpfsSentStorage.set(fileId, file);
+        } else {
+            const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
+            sentFileBlobs.set(fileId, fileBlob);
+        }
         
         // Add to sender's history first
         const fileInfo = {
@@ -2563,20 +2575,18 @@ async function sendFile(file) {
             type: file.type,
             size: file.size,
             id: fileId,
-            blob: fileBlob,
             sharedBy: peer.id
         };
         addFileToHistory(fileInfo, 'sent');
 
         // Send to all connected peers
-        const sendPromises = [];
         let successCount = 0;
         const errors = [];
 
         for (const [peerId, conn] of connections) {
             if (conn && conn.open) {
                 try {
-                    await sendFileToPeer(file, conn, fileId, fileBlob);
+                    await sendFileToPeer(file, conn, fileId);
                     successCount++;
                 } catch (error) {
                     errors.push(error.message);
@@ -4427,13 +4437,16 @@ function createFileListItem(fileInfo, type) {
                 device_type: Analytics.getDeviceType()
             });
             
-            if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
-                // For sent files, we have the blob locally - download immediately (no progress needed for local files)
-                const blob = sentFileBlobs.get(fileInfo.id);
-                downloadBlob(blob, fileInfo.name, fileInfo.id);
+            if (type === 'sent') {
+                const hasLocal = sentFileBlobs.has(fileInfo.id) || (window.OpfsSentStorage && await window.OpfsSentStorage.hasAsync(fileInfo.id));
+                if (hasLocal) {
+                    const blob = sentFileBlobs.get(fileInfo.id) || (window.OpfsSentStorage ? await window.OpfsSentStorage.getBlob(fileInfo.id) : null);
+                    if (blob) downloadBlob(blob, fileInfo.name, fileInfo.id);
+                    else showNotification('File no longer available', 'error');
+                } else {
+                    showNotification('File no longer available (cleared from storage)', 'error');
+                }
             } else {
-                // For received files, request the blob from the original sender
-                // This will show progress via the patched requestAndDownloadBlob function
                 await requestAndDownloadBlob(fileInfo);
             }
         } catch (error) {
@@ -4883,9 +4896,10 @@ function handleBeforeUnload(event) {
     });
     activeBlobURLs.clear();
     
-    // Clear sent file blobs to free memory
-    console.log(`🧹 Clearing ${sentFileBlobs.size} sent file blob(s)...`);
+    // Clear sent file storage (OPFS + blob fallback)
+    console.log(`🧹 Clearing sent file storage...`);
     sentFileBlobs.clear();
+    if (window.OpfsSentStorage) window.OpfsSentStorage.clear();
     
     // Clear file chunks and abort any active picker downloads
     console.log(`🧹 Clearing file chunks...`);
@@ -5106,10 +5120,13 @@ async function handleSimultaneousDownloadRequest(data, conn) {
     console.log('Received simultaneous download request:', data);
     const { fileId } = data;
     
-    // Check if we have the blob
     const blob = sentFileBlobs.get(fileId);
-    if (!blob) {
-        console.error('Blob not found for file:', fileId);
+    const storage = window.OpfsSentStorage;
+    const hasFile = !!blob || (storage && await storage.hasAsync(fileId));
+    const fileSize = blob ? blob.size : (storage ? await storage.getSize(fileId) : 0);
+
+    if (!hasFile || !fileSize) {
+        console.error('File not found for file:', fileId);
         conn.send({
             type: MESSAGE_TYPES.BLOB_ERROR,
             fileId: fileId,
@@ -5118,11 +5135,10 @@ async function handleSimultaneousDownloadRequest(data, conn) {
         return;
     }
 
-    // Send ready signal
     conn.send({
         type: MESSAGE_TYPES.SIMULTANEOUS_DOWNLOAD_READY,
         fileId: fileId,
-        fileSize: blob.size
+        fileSize: fileSize
     });
 }
 
