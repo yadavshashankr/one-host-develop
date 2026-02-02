@@ -1709,6 +1709,7 @@ async function handleBlobRequest(data, conn) {
                 if (!conn.open) {
                     throw new Error('Connection lost during transfer');
                 }
+                await waitForBufferDrain(conn);
                 const end = Math.min(offset + chunkSize, fileSize);
                 const chunk = file.slice(offset, end);
                 const buffer = await chunk.arrayBuffer();
@@ -1936,6 +1937,20 @@ function isIOS() {
 function useDirectFileSlice(file) {
     const threshold = window.CONFIG?.FILE_SLICE_IOS_THRESHOLD ?? 400 * 1024 * 1024;
     return isIOS() && (file.size || 0) > threshold;
+}
+
+// Wait for WebRTC buffer to drain (prevents iOS tab refresh from unbounded bufferedAmount)
+async function waitForBufferDrain(conn, threshold) {
+    const dc = conn.dataChannel || conn._dc;
+    if (dc && dc.readyState === 'open' && typeof dc.bufferedAmount === 'number') {
+        const limit = threshold ?? (window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 2 * 1024 * 1024);
+        while (dc.readyState === 'open' && dc.bufferedAmount > limit) {
+            await new Promise(r => setTimeout(r, 50));
+        }
+    } else if (isIOS()) {
+        // Fallback: small delay between chunks when dc inaccessible (throttles send rate)
+        await new Promise(r => setTimeout(r, 10));
+    }
 }
 
 // File System Access API: grants persistent read permission (avoids NotReadableError when picker blurs page)
