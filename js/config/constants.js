@@ -30,6 +30,7 @@ const CONFIG = {
     // Other constants
     CHUNK_SIZE: 32768, // 32 KB - fewer chunks = faster 99→100% (was 16KB)
     FILE_PICKER_SIZE_THRESHOLD: 400 * 1024 * 1024, // 400 MB - use showSaveFilePicker above this
+    FILE_SLICE_IOS_THRESHOLD: 400 * 1024 * 1024, // 400 MB - iOS: use direct File.slice() above this, no OPFS
     BUFFERED_AMOUNT_THRESHOLD: 2 * 1024 * 1024, // 2 MB - lower = less 99% stall (was 4MB)
     DB_NAME: 'fileTransferDB',
     DB_VERSION: 1,

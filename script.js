@@ -211,6 +211,9 @@ const changedGroups = new Set();
 // Add blob storage for sent files
 const sentFileBlobs = new Map(); // Fallback when OpfsSentStorage not loaded; otherwise OpfsSentStorage holds files
 
+// iOS large files (>400MB): store File reference, slice on-demand when receiver requests (no OPFS)
+const deferredFileMap = new Map(); // fileId -> { file, name, type, size }
+
 // Track all blob URLs for cleanup
 const activeBlobURLs = new Set(); // Set to track all created blob URLs
 
@@ -1680,6 +1683,79 @@ async function handleBlobRequest(data, conn) {
     const { fileId, forwardTo } = data;
     console.log('Received blob request for file:', fileId);
 
+    // iOS large files (>400MB): read directly from File via slice, no OPFS
+    const deferred = deferredFileMap.get(fileId);
+    if (deferred) {
+        try {
+            const { file, name, type, size } = deferred;
+            const fileSize = size;
+            const fileType = type || 'application/octet-stream';
+
+            conn.send({
+                type: 'file-header',
+                fileId: fileId,
+                fileName: data.fileName || name,
+                fileType: fileType,
+                fileSize: fileSize,
+                originalSender: peer.id,
+                timestamp: Date.now()
+            });
+
+            let offset = 0;
+            let lastProgressUpdate = 0;
+            const chunkSize = CHUNK_SIZE;
+
+            while (offset < fileSize) {
+                if (!conn.open) {
+                    throw new Error('Connection lost during transfer');
+                }
+                const end = Math.min(offset + chunkSize, fileSize);
+                const chunk = file.slice(offset, end);
+                const buffer = await chunk.arrayBuffer();
+                conn.send({
+                    type: 'file-chunk',
+                    fileId: fileId,
+                    data: buffer,
+                    offset: offset,
+                    total: fileSize
+                });
+                offset += buffer.byteLength;
+
+                const currentProgress = (offset / fileSize) * 100;
+                if (currentProgress >= 99 && offset === fileSize) {
+                    console.log(`[99→100 TX] last chunk sent offset=${offset} fileSize=${fileSize} (deferred)`);
+                }
+                if (currentProgress - lastProgressUpdate >= 1) {
+                    updateProgress(currentProgress, fileId);
+                    lastProgressUpdate = currentProgress;
+                }
+            }
+
+            console.log(`[99→100 TX] sending file-complete (deferred)`);
+            conn.send({
+                type: 'file-complete',
+                fileId: fileId,
+                fileName: data.fileName || name,
+                fileType: fileType,
+                fileSize: fileSize,
+                timestamp: Date.now()
+            });
+            deferredFileMap.delete(fileId);
+            console.log(`File sent successfully to peer ${conn.peer} (deferred File.slice)`);
+        } catch (error) {
+            console.error(`Error sending deferred file to peer:`, error);
+            deferredFileMap.delete(fileId);
+            conn.send({
+                type: 'blob-error',
+                fileId: fileId,
+                error: error.name === 'NotReadableError'
+                    ? 'File access lost. Re-select file and keep tab active.'
+                    : error.message
+            });
+        }
+        return;
+    }
+
     const storage = window.OpfsSentStorage;
     const blobFallback = sentFileBlobs.get(fileId);
     const hasFile = storage ? await storage.hasAsync(fileId) : !!blobFallback;
@@ -1850,6 +1926,16 @@ async function requestBlobFromPeer(fileInfo) {
 
 function supportsShowSaveFilePicker() {
     return typeof window.showSaveFilePicker === 'function';
+}
+
+function isIOS() {
+    const ua = navigator.userAgent || '';
+    return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function useDirectFileSlice(file) {
+    const threshold = window.CONFIG?.FILE_SLICE_IOS_THRESHOLD ?? 400 * 1024 * 1024;
+    return isIOS() && (file.size || 0) > threshold;
 }
 
 // File System Access API: grants persistent read permission (avoids NotReadableError when picker blurs page)
@@ -2646,7 +2732,14 @@ async function sendFile(preparedOrFile) {
     }
 
     if (transferInProgress) {
-        const file = preparedOrFile;
+        const item = preparedOrFile;
+        if (item.deferred) {
+            fileQueue.push(item);
+            showNotification(`${item.name} added to queue`, 'info');
+            processFileQueue();
+            return;
+        }
+        const file = item;
         if (!file || typeof file.arrayBuffer !== 'function') {
             showNotification('Invalid file', 'error');
             return;
@@ -3476,8 +3569,14 @@ elements.dropZone.addEventListener('drop', async (e) => {
         updateTransferInfo(`Processing queue: ${files.length} file(s) remaining`);
         for (const file of Array.from(files)) {
             try {
-                const prepared = await prepareFileForSend(file);
-                fileQueue.push(prepared);
+                const fileId = generateFileId(file);
+                if (useDirectFileSlice(file)) {
+                    deferredFileMap.set(fileId, { file, name: file.name, type: file.type, size: file.size });
+                    fileQueue.push({ fileId, name: file.name, type: file.type, size: file.size, deferred: true });
+                } else {
+                    const prepared = await prepareFileForSend(file);
+                    fileQueue.push(prepared);
+                }
             } catch (err) {
                 console.error('Prepare file error:', err);
                 const msg = err.name === 'NotReadableError'
@@ -3538,11 +3637,16 @@ elements.fileInput.addEventListener('change', async (e) => {
             // Show notification immediately when files are selected (before preparing)
             showOrUpdateProgressNotification('sending', 0, files.length, 'sending');
             updateTransferInfo(`Processing queue: ${files.length} file(s) remaining`);
-            // Read into storage immediately (before permission can be revoked)
             for (const file of Array.from(files)) {
                 try {
-                    const prepared = await prepareFileForSend(file);
-                    fileQueue.push(prepared);
+                    const fileId = generateFileId(file);
+                    if (useDirectFileSlice(file)) {
+                        deferredFileMap.set(fileId, { file, name: file.name, type: file.type, size: file.size });
+                        fileQueue.push({ fileId, name: file.name, type: file.type, size: file.size, deferred: true });
+                    } else {
+                        const prepared = await prepareFileForSend(file);
+                        fileQueue.push(prepared);
+                    }
                 } catch (err) {
                     console.error('Prepare file error:', err);
                     const msg = err.name === 'NotReadableError'
@@ -4575,9 +4679,12 @@ function createFileListItem(fileInfo, type) {
             });
             
             if (type === 'sent') {
-                const hasLocal = sentFileBlobs.has(fileInfo.id) || (window.OpfsSentStorage && await window.OpfsSentStorage.hasAsync(fileInfo.id));
+                const deferred = deferredFileMap.get(fileInfo.id);
+                const hasLocal = deferred || sentFileBlobs.has(fileInfo.id) || (window.OpfsSentStorage && await window.OpfsSentStorage.hasAsync(fileInfo.id));
                 if (hasLocal) {
-                    const blob = sentFileBlobs.get(fileInfo.id) || (window.OpfsSentStorage ? await window.OpfsSentStorage.getBlob(fileInfo.id) : null);
+                    let blob = null;
+                    if (deferred) blob = deferred.file;
+                    else blob = sentFileBlobs.get(fileInfo.id) || (window.OpfsSentStorage ? await window.OpfsSentStorage.getBlob(fileInfo.id) : null);
                     if (blob) downloadBlob(blob, fileInfo.name, fileInfo.id);
                     else showNotification('File no longer available', 'error');
                 } else {
@@ -5041,10 +5148,11 @@ function handleBeforeUnload(event) {
     // Clear file chunks and abort any active picker downloads
     console.log(`🧹 Clearing file chunks...`);
     fileChunks = {};
-    for (const [fileId, entry] of pickerDownloadMap) {
+    for (const [, entry] of pickerDownloadMap) {
         try { entry.writable.close(); } catch (_) {}
     }
     pickerDownloadMap.clear();
+    deferredFileMap.clear();
 }
 
 // Send keep-alive messages to all connected peers
@@ -5257,10 +5365,11 @@ async function handleSimultaneousDownloadRequest(data, conn) {
     console.log('Received simultaneous download request:', data);
     const { fileId } = data;
     
+    const deferred = deferredFileMap.get(fileId);
     const blob = sentFileBlobs.get(fileId);
     const storage = window.OpfsSentStorage;
-    const hasFile = !!blob || (storage && await storage.hasAsync(fileId));
-    const fileSize = blob ? blob.size : (storage ? await storage.getSize(fileId) : 0);
+    const hasFile = !!deferred || !!blob || (storage && await storage.hasAsync(fileId));
+    const fileSize = deferred ? deferred.size : (blob ? blob.size : (storage ? await storage.getSize(fileId) : 0));
 
     if (!hasFile || !fileSize) {
         console.error('File not found for file:', fileId);
