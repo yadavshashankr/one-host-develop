@@ -53,10 +53,17 @@
                 console.warn('[OPFS] Save failed, falling back to blob:', e);
             }
         }
-        const blob = new Blob([await file.arrayBuffer()], { type: file.type });
-        _blobFallback.set(fileId, blob);
-        _meta.set(fileId, { type: file.type || 'application/octet-stream' });
-        return true;
+        try {
+            const blob = new Blob([await file.arrayBuffer()], { type: file.type });
+            _blobFallback.set(fileId, blob);
+            _meta.set(fileId, { type: file.type || 'application/octet-stream' });
+            return true;
+        } catch (e) {
+            if (e.name === 'NotFoundError' || e.name === 'NotReadableError') {
+                throw new Error('File could not be read. It may have been moved, deleted, or is on a network/synced drive. Try copying to a local folder and selecting again.');
+            }
+            throw e;
+        }
     }
 
     function has(fileId) {

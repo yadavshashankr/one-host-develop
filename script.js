@@ -2730,11 +2730,18 @@ async function processFileQueue() {
 // Prepare file for send: read into OPFS/blob immediately (avoids NotReadableError when tab is blurred).
 async function prepareFileForSend(file) {
     const fileId = generateFileId(file);
-    if (window.OpfsSentStorage) {
-        await window.OpfsSentStorage.set(fileId, file);
-    } else {
-        const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
-        sentFileBlobs.set(fileId, fileBlob);
+    try {
+        if (window.OpfsSentStorage) {
+            await window.OpfsSentStorage.set(fileId, file);
+        } else {
+            const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type });
+            sentFileBlobs.set(fileId, fileBlob);
+        }
+    } catch (err) {
+        if (err.name === 'NotFoundError' || err.message?.includes('could not be read')) {
+            throw err.message?.includes('could not be read') ? err : new Error('File could not be read. It may have been moved, deleted, or is on a network/synced drive. Try copying to a local folder and selecting again.');
+        }
+        throw err;
     }
     return { fileId, name: file.name, type: file.type, size: file.size };
 }
