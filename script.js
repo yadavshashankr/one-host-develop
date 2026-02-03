@@ -3781,8 +3781,10 @@ elements.dropZone.addEventListener('click', () => {
         Analytics.track('file_upload_blocked_no_connection');
         return;
     }
-    // Use showOpenFilePicker when available - grants persistent permission, avoids NotReadableError when picker blurs page
-    if (supportsOpenFilePicker()) {
+    // On mobile: use native file input (shows camera, record, choose file options)
+    // On desktop: use showOpenFilePicker when available (persistent permission, avoids NotReadableError)
+    const useNativePicker = isIOS() || isAndroid();
+    if (!useNativePicker && supportsOpenFilePicker()) {
         openFilesWithPicker().catch(err => {
             if (err.name === 'AbortError') return; // User cancelled
             console.error('Open file picker error:', err);
