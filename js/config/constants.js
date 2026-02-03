@@ -32,6 +32,8 @@ const CONFIG = {
     FILE_PICKER_SIZE_THRESHOLD: 400 * 1024 * 1024, // 400 MB - use showSaveFilePicker above this
     FILE_SLICE_IOS_THRESHOLD: 400 * 1024 * 1024, // 400 MB - iOS: use direct File.slice() above this, no OPFS
     BUFFERED_AMOUNT_THRESHOLD: 2 * 1024 * 1024, // 2 MB - lower = less 99% stall (was 4MB)
+    STREAMING_QUEUE_THRESHOLD: 400 * 1024 * 1024, // 400 MB - non-iOS: use File.stream + queue above this
+    STREAMING_QUEUE_MAX_BYTES: 10 * 1024 * 1024, // 10 MB - max bytes in queue for producer-consumer
     DB_NAME: 'fileTransferDB',
     DB_VERSION: 1,
     STORE_NAME: 'files',

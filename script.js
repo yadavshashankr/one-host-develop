@@ -214,6 +214,46 @@ const sentFileBlobs = new Map(); // Fallback when OpfsSentStorage not loaded; ot
 // iOS large files (>400MB): store File reference, slice on-demand when receiver requests (no OPFS)
 const deferredFileMap = new Map(); // fileId -> { file, name, type, size }
 
+// Non-iOS large files (>400MB): store File reference, stream via File.stream() + queue when receiver requests
+const streamingFileMap = new Map(); // fileId -> { file, name, type, size }
+
+// Bounded async queue for producer-consumer (File.stream → WebRTC)
+class ChunkQueue {
+    constructor(maxBytes) {
+        this.chunks = [];
+        this.totalBytes = 0;
+        this.maxBytes = maxBytes || (window.CONFIG?.STREAMING_QUEUE_MAX_BYTES ?? 10 * 1024 * 1024);
+        this.done = false;
+        this._waitForSpace = null;
+        this._waitForData = null;
+    }
+    async push(buffer) {
+        const len = buffer.byteLength;
+        while (this.totalBytes + len > this.maxBytes && !this.done) {
+            await new Promise(r => { this._waitForSpace = r; });
+        }
+        if (this.done) return;
+        this.chunks.push(buffer);
+        this.totalBytes += len;
+        if (this._waitForData) { this._waitForData(); this._waitForData = null; }
+    }
+    setDone() {
+        this.done = true;
+        if (this._waitForSpace) { this._waitForSpace(); this._waitForSpace = null; }
+        if (this._waitForData) { this._waitForData(); this._waitForData = null; }
+    }
+    async pull() {
+        while (this.chunks.length === 0 && !this.done) {
+            await new Promise(r => { this._waitForData = r; });
+        }
+        if (this.chunks.length === 0) return null;
+        const buffer = this.chunks.shift();
+        this.totalBytes -= buffer.byteLength;
+        if (this._waitForSpace) { this._waitForSpace(); this._waitForSpace = null; }
+        return buffer;
+    }
+}
+
 // Track all blob URLs for cleanup
 const activeBlobURLs = new Set(); // Set to track all created blob URLs
 
@@ -1757,6 +1797,93 @@ async function handleBlobRequest(data, conn) {
         return;
     }
 
+    // Non-iOS large files: File.stream() + ChunkQueue (producer-consumer)
+    const streaming = streamingFileMap.get(fileId);
+    if (streaming) {
+        try {
+            const { file, name, type, size } = streaming;
+            const fileSize = size;
+            const fileType = type || 'application/octet-stream';
+            const maxBytes = window.CONFIG?.STREAMING_QUEUE_MAX_BYTES ?? 10 * 1024 * 1024;
+            const queue = new ChunkQueue(maxBytes);
+
+            conn.send({
+                type: 'file-header',
+                fileId: fileId,
+                fileName: data.fileName || name,
+                fileType: fileType,
+                fileSize: fileSize,
+                originalSender: peer.id,
+                timestamp: Date.now()
+            });
+
+            // Producer: File.stream() -> queue
+            const producer = (async () => {
+                try {
+                    const reader = file.stream().getReader();
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        if (!value) continue;
+                        const buf = value.byteLength === value.buffer.byteLength
+                            ? value.buffer
+                            : value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+                        await queue.push(buf);
+                    }
+                    queue.setDone();
+                } catch (e) {
+                    console.error('Streaming producer error:', e);
+                    queue.setDone();
+                }
+            })();
+
+            // Consumer: queue -> WebRTC
+            let lastProgressUpdate = 0;
+            let totalSent = 0;
+            let chunk;
+            while ((chunk = await queue.pull()) !== null) {
+                if (!conn.open) throw new Error('Connection lost during transfer');
+                await waitForBufferDrain(conn);
+                conn.send({
+                    type: 'file-chunk',
+                    fileId: fileId,
+                    data: chunk,
+                    offset: totalSent,
+                    total: fileSize
+                });
+                totalSent += chunk.byteLength;
+                const currentProgress = (totalSent / fileSize) * 100;
+                if (currentProgress - lastProgressUpdate >= 1) {
+                    updateProgress(currentProgress, fileId);
+                    lastProgressUpdate = currentProgress;
+                }
+            }
+
+            await producer;
+            streamingFileMap.delete(fileId);
+            conn.send({
+                type: 'file-complete',
+                fileId: fileId,
+                fileName: data.fileName || name,
+                fileType: fileType,
+                fileSize: fileSize,
+                timestamp: Date.now()
+            });
+            console.log(`File sent successfully to peer ${conn.peer} (File.stream + queue)`);
+        } catch (error) {
+            console.error(`Error sending streaming file to peer:`, error);
+            streamingFileMap.delete(fileId);
+            conn.send({
+                type: 'blob-error',
+                fileId: fileId,
+                error: error.name === 'NotReadableError'
+                    ? 'File access lost. Re-select file and keep tab active.'
+                    : error.message
+            });
+        }
+        return;
+    }
+
     const storage = window.OpfsSentStorage;
     const blobFallback = sentFileBlobs.get(fileId);
     const hasFile = storage ? await storage.hasAsync(fileId) : !!blobFallback;
@@ -1939,16 +2066,22 @@ function useDirectFileSlice(file) {
     return isIOS() && (file.size || 0) > threshold;
 }
 
+// Non-iOS large files: use File.stream() + queue (metadata immediately, stream on request)
+function useStreamingQueue(file) {
+    const threshold = window.CONFIG?.STREAMING_QUEUE_THRESHOLD ?? 400 * 1024 * 1024;
+    return !isIOS() && (file.size || 0) > threshold;
+}
+
 // Wait for WebRTC buffer to drain (prevents iOS tab refresh from unbounded bufferedAmount)
+// iOS: use bufferedAmount if dc accessible. Non-iOS + streaming: 10ms for speed.
 async function waitForBufferDrain(conn, threshold) {
     const dc = conn.dataChannel || conn._dc;
-    if (dc && dc.readyState === 'open' && typeof dc.bufferedAmount === 'number') {
+    if (isIOS() && dc && dc.readyState === 'open' && typeof dc.bufferedAmount === 'number') {
         const limit = threshold ?? (window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 2 * 1024 * 1024);
         while (dc.readyState === 'open' && dc.bufferedAmount > limit) {
             await new Promise(r => setTimeout(r, 50));
         }
-    } else if (isIOS()) {
-        // Fallback: small delay between chunks when dc inaccessible (throttles send rate)
+    } else {
         await new Promise(r => setTimeout(r, 10));
     }
 }
@@ -1968,9 +2101,22 @@ async function openFilesWithPicker() {
     for (const handle of handles) {
         try {
             const file = await handle.getFile(); // Permission persists - handle-based, not page-focus
-            const prepared = await prepareFileForSend(file);
-            fileQueue.push(prepared);
-            added.push(prepared);
+            const fileId = generateFileId(file);
+            if (useDirectFileSlice(file)) {
+                deferredFileMap.set(fileId, { file, name: file.name, type: file.type, size: file.size });
+                const prepared = { fileId, name: file.name, type: file.type, size: file.size, deferred: true };
+                fileQueue.push(prepared);
+                added.push(prepared);
+            } else if (useStreamingQueue(file)) {
+                streamingFileMap.set(fileId, { file, name: file.name, type: file.type, size: file.size });
+                const prepared = { fileId, name: file.name, type: file.type, size: file.size, streaming: true };
+                fileQueue.push(prepared);
+                added.push(prepared);
+            } else {
+                const prepared = await prepareFileForSend(file);
+                fileQueue.push(prepared);
+                added.push(prepared);
+            }
         } catch (err) {
             console.error('Prepare file error:', err);
             const name = handle.name || 'File';
@@ -2755,7 +2901,7 @@ async function sendFile(preparedOrFile) {
 
     if (transferInProgress) {
         const item = preparedOrFile;
-        if (item.deferred) {
+        if (item.deferred || item.streaming) {
             fileQueue.push(item);
             showNotification(`${item.name} added to queue`, 'info');
             processFileQueue();
@@ -3595,6 +3741,9 @@ elements.dropZone.addEventListener('drop', async (e) => {
                 if (useDirectFileSlice(file)) {
                     deferredFileMap.set(fileId, { file, name: file.name, type: file.type, size: file.size });
                     fileQueue.push({ fileId, name: file.name, type: file.type, size: file.size, deferred: true });
+                } else if (useStreamingQueue(file)) {
+                    streamingFileMap.set(fileId, { file, name: file.name, type: file.type, size: file.size });
+                    fileQueue.push({ fileId, name: file.name, type: file.type, size: file.size, streaming: true });
                 } else {
                     const prepared = await prepareFileForSend(file);
                     fileQueue.push(prepared);
@@ -3665,6 +3814,9 @@ elements.fileInput.addEventListener('change', async (e) => {
                     if (useDirectFileSlice(file)) {
                         deferredFileMap.set(fileId, { file, name: file.name, type: file.type, size: file.size });
                         fileQueue.push({ fileId, name: file.name, type: file.type, size: file.size, deferred: true });
+                    } else if (useStreamingQueue(file)) {
+                        streamingFileMap.set(fileId, { file, name: file.name, type: file.type, size: file.size });
+                        fileQueue.push({ fileId, name: file.name, type: file.type, size: file.size, streaming: true });
                     } else {
                         const prepared = await prepareFileForSend(file);
                         fileQueue.push(prepared);
@@ -4702,10 +4854,12 @@ function createFileListItem(fileInfo, type) {
             
             if (type === 'sent') {
                 const deferred = deferredFileMap.get(fileInfo.id);
-                const hasLocal = deferred || sentFileBlobs.has(fileInfo.id) || (window.OpfsSentStorage && await window.OpfsSentStorage.hasAsync(fileInfo.id));
+                const streaming = streamingFileMap.get(fileInfo.id);
+                const hasLocal = deferred || streaming || sentFileBlobs.has(fileInfo.id) || (window.OpfsSentStorage && await window.OpfsSentStorage.hasAsync(fileInfo.id));
                 if (hasLocal) {
                     let blob = null;
                     if (deferred) blob = deferred.file;
+                    else if (streaming) blob = streaming.file;
                     else blob = sentFileBlobs.get(fileInfo.id) || (window.OpfsSentStorage ? await window.OpfsSentStorage.getBlob(fileInfo.id) : null);
                     if (blob) downloadBlob(blob, fileInfo.name, fileInfo.id);
                     else showNotification('File no longer available', 'error');
@@ -5175,6 +5329,7 @@ function handleBeforeUnload(event) {
     }
     pickerDownloadMap.clear();
     deferredFileMap.clear();
+    streamingFileMap.clear();
 }
 
 // Send keep-alive messages to all connected peers
@@ -5388,10 +5543,11 @@ async function handleSimultaneousDownloadRequest(data, conn) {
     const { fileId } = data;
     
     const deferred = deferredFileMap.get(fileId);
+    const streaming = streamingFileMap.get(fileId);
     const blob = sentFileBlobs.get(fileId);
     const storage = window.OpfsSentStorage;
-    const hasFile = !!deferred || !!blob || (storage && await storage.hasAsync(fileId));
-    const fileSize = deferred ? deferred.size : (blob ? blob.size : (storage ? await storage.getSize(fileId) : 0));
+    const hasFile = !!deferred || !!streaming || !!blob || (storage && await storage.hasAsync(fileId));
+    const fileSize = deferred ? deferred.size : (streaming ? streaming.size : (blob ? blob.size : (storage ? await storage.getSize(fileId) : 0)));
 
     if (!hasFile || !fileSize) {
         console.error('File not found for file:', fileId);
