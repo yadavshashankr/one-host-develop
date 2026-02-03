@@ -1804,7 +1804,8 @@ async function handleBlobRequest(data, conn) {
             const { file, name, type, size } = streaming;
             const fileSize = size;
             const fileType = type || 'application/octet-stream';
-            const maxBytes = window.CONFIG?.STREAMING_QUEUE_MAX_BYTES ?? 10 * 1024 * 1024;
+            // Smaller queue on mobile to prevent OOM / "Aw Snap!"
+            const maxBytes = isAndroid() ? (2 * 1024 * 1024) : (window.CONFIG?.STREAMING_QUEUE_MAX_BYTES ?? 10 * 1024 * 1024);
             const queue = new ChunkQueue(maxBytes);
 
             conn.send({
@@ -2061,6 +2062,10 @@ function isIOS() {
     return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
+function isAndroid() {
+    return /android/i.test(navigator.userAgent || '');
+}
+
 function useDirectFileSlice(file) {
     const threshold = window.CONFIG?.FILE_SLICE_IOS_THRESHOLD ?? 400 * 1024 * 1024;
     return isIOS() && (file.size || 0) > threshold;
@@ -2072,11 +2077,13 @@ function useStreamingQueue(file) {
     return !isIOS() && (file.size || 0) > threshold;
 }
 
-// Wait for WebRTC buffer to drain (prevents iOS tab refresh from unbounded bufferedAmount)
-// iOS: use bufferedAmount if dc accessible. Non-iOS + streaming: 10ms for speed.
+// Wait for WebRTC buffer to drain (prevents OOM / tab crash on mobile)
+// Mobile (iOS/Android): use bufferedAmount to throttle - prevents "Aw Snap!" on sender
+// Desktop: 10ms for speed
 async function waitForBufferDrain(conn, threshold) {
     const dc = conn.dataChannel || conn._dc;
-    if (isIOS() && dc && dc.readyState === 'open' && typeof dc.bufferedAmount === 'number') {
+    const isMobile = isIOS() || isAndroid();
+    if (isMobile && dc && dc.readyState === 'open' && typeof dc.bufferedAmount === 'number') {
         const limit = threshold ?? (window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 2 * 1024 * 1024);
         while (dc.readyState === 'open' && dc.bufferedAmount > limit) {
             await new Promise(r => setTimeout(r, 50));
