@@ -1361,6 +1361,7 @@ async function handleFileHeader(data) {
         entry.fileSize = data.fileSize;
         entry.originalSender = data.originalSender;
         entry.receivedSize = 0;
+        entry.writePosition = 0;
     } else {
         fileChunks[data.fileId] = {
             chunks: [],
@@ -1406,7 +1407,9 @@ async function handleFileChunk(data) {
             entry.writeBuf = [];
             entry.writeBufSize = 0;
             try {
-                await entry.writable.write(toWrite);
+                const pos = entry.writePosition;
+                await entry.writable.write({ type: 'write', position: pos, data: toWrite });
+                entry.writePosition = pos + toWrite.byteLength;
             } catch (err) {
                 console.error('Error writing chunk to disk:', err);
                 showNotification('Error writing file to disk', 'error');
@@ -1487,7 +1490,9 @@ async function handleFileComplete(data) {
                         off += c.byteLength;
                     }
                 }
-                await entry.writable.write(toWrite);
+                const pos = entry.writePosition;
+                await entry.writable.write({ type: 'write', position: pos, data: toWrite });
+                entry.writePosition = pos + toWrite.byteLength;
             } catch (_) {}
             entry.writeBuf = [];
             entry.writeBufSize = 0;
@@ -1508,7 +1513,7 @@ async function handleFileComplete(data) {
             showNotification(`File incomplete (${missing} KB missing)`, 'error');
         } else {
             pickerDownloadMap.delete(data.fileId);
-            showNotification(`Finalizing ${entry.fileName}...`, 'info');
+            const finalizingNotif = showNotification(`Finalizing ${entry.fileName}...`, 'info', 0);
             try {
                 await entry.writable.close();
                 await finishPickerDownloadUI(data.fileId, entry);
@@ -1516,6 +1521,8 @@ async function handleFileComplete(data) {
                 console.error('Error completing picker download:', err);
                 showNotification('Error processing file: ' + err.message, 'error');
                 try { await entry.writable.close(); } catch (_) {}
+            } finally {
+                if (finalizingNotif && finalizingNotif.parentNode) finalizingNotif.remove();
             }
         }
         elements.transferProgress.classList.add('hidden');
@@ -2174,6 +2181,7 @@ async function requestAndDownloadBlob(fileInfo) {
                     fileType: fileInfo.type || 'application/octet-stream',
                     fileSize: fileInfo.size,
                     receivedSize: 0,
+                    writePosition: 0,
                     originalSender: fileInfo.sharedBy,
                     lastProgressUpdate: 0
                 });
