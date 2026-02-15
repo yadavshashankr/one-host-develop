@@ -1389,7 +1389,7 @@ async function handleFileChunk(data) {
     if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
         const chunk = data.data;
-        const WRITE_BATCH = 65536; // 64 KB - batch writes to reduce 99% stall
+        const WRITE_BATCH = 64 * 1024; // 64 KB
         if (!entry.writeBuf) entry.writeBuf = [];
         if (!entry.writeBufSize) entry.writeBufSize = 0;
         entry.writeBuf.push(chunk);
@@ -1508,6 +1508,7 @@ async function handleFileComplete(data) {
             showNotification(`File incomplete (${missing} KB missing)`, 'error');
         } else {
             pickerDownloadMap.delete(data.fileId);
+            showNotification(`Finalizing ${entry.fileName}...`, 'info');
             try {
                 await entry.writable.close();
                 await finishPickerDownloadUI(data.fileId, entry);
