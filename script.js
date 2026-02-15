@@ -1749,7 +1749,8 @@ async function handleBlobRequest(data, conn) {
                 if (!conn.open) {
                     throw new Error('Connection lost during transfer');
                 }
-                await waitForBufferDrain(conn);
+                const nearEnd = (fileSize - offset) <= Math.max(chunkSize * 2, fileSize * 0.01);
+                await waitForBufferDrain(conn, isIOS() && nearEnd ? 0 : undefined);
                 const end = Math.min(offset + chunkSize, fileSize);
                 const chunk = file.slice(offset, end);
                 const buffer = await chunk.arrayBuffer();
@@ -1772,17 +1773,22 @@ async function handleBlobRequest(data, conn) {
                 }
             }
 
-            console.log(`[99→100 TX] sending file-complete (deferred)`);
-            conn.send({
+            // Defer to next macrotask so iOS doesn't starve file-complete when page blurred
+            const fileCompletePayload = {
                 type: 'file-complete',
                 fileId: fileId,
                 fileName: data.fileName || name,
                 fileType: fileType,
                 fileSize: fileSize,
                 timestamp: Date.now()
-            });
-            deferredFileMap.delete(fileId);
-            console.log(`File sent successfully to peer ${conn.peer} (deferred File.slice)`);
+            };
+            setTimeout(() => {
+                if (!conn.open) return;
+                console.log(`[99→100 TX] sending file-complete (deferred)`);
+                conn.send(fileCompletePayload);
+                deferredFileMap.delete(fileId);
+                console.log(`File sent successfully to peer ${conn.peer} (deferred File.slice)`);
+            }, 0);
         } catch (error) {
             console.error(`Error sending deferred file to peer:`, error);
             deferredFileMap.delete(fileId);
@@ -2083,8 +2089,9 @@ function useStreamingQueue(file) {
 async function waitForBufferDrain(conn, threshold) {
     const dc = conn.dataChannel || conn._dc;
     const isMobile = isIOS() || isAndroid();
-    if (isMobile && dc && dc.readyState === 'open' && typeof dc.bufferedAmount === 'number') {
-        const limit = threshold ?? (window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 2 * 1024 * 1024);
+    const skipBufferWait = threshold === 0; // Explicit 0 = use short delay only (avoids iOS last-1% stall)
+    if (!skipBufferWait && isMobile && dc && dc.readyState === 'open' && typeof dc.bufferedAmount === 'number') {
+        const limit = (threshold != null && threshold > 0) ? threshold : (window.CONFIG?.BUFFERED_AMOUNT_THRESHOLD ?? 2 * 1024 * 1024);
         while (dc.readyState === 'open' && dc.bufferedAmount > limit) {
             await new Promise(r => setTimeout(r, 50));
         }
