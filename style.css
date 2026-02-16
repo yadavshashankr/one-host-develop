@@ -483,6 +483,11 @@ h3 {
     transition: background-color 0.2s;
 }
 
+a.icon-button {
+    text-decoration: none;
+    color: inherit;
+}
+
 .icon-button:hover {
     background-color: var(--border-color);
 }
@@ -1120,12 +1125,17 @@ input[type="file"] {
 }
 
 /* Disabled edit button state */
-.icon-button:disabled {
+.icon-button:disabled,
+.icon-button[disabled],
+.icon-button.downloading {
     opacity: 0.5;
     cursor: not-allowed;
+    pointer-events: none;
 }
 
-.icon-button:disabled:hover {
+.icon-button:disabled:hover,
+.icon-button[disabled]:hover,
+.icon-button.downloading:hover {
     background-color: transparent;
 }
 

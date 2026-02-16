@@ -304,18 +304,19 @@ const originalRequestAndDownloadBlob = requestAndDownloadBlob;
 requestAndDownloadBlob = async function(fileInfo) {
     const fileId = fileInfo.id;
     // Find button in both grouped content and old list structure
-    let btn = document.querySelector(`button.icon-button[data-file-id="${fileId}"]`);
+    let btn = document.querySelector(`.icon-button[data-file-id="${fileId}"]`);
     if (!btn) {
-        // Also try finding by the list item's data-file-id
         const listItem = document.querySelector(`li.file-item[data-file-id="${fileId}"]`);
         if (listItem) {
-            btn = listItem.querySelector('button.icon-button');
+            btn = listItem.querySelector('.icon-button');
         }
     }
     // Always set up progress tracking, even if button isn't found (e.g., header is collapsed)
     // This ensures progress can be restored when header is expanded
     if (btn) {
-        btn.disabled = true;
+        btn.setAttribute('disabled', '');
+        btn.classList.add('downloading');
+        if (btn.tagName === 'BUTTON') btn.disabled = true;
         btn.innerHTML = '<span class="download-progress-text" translate="no">0%</span>';
         downloadProgressMap.set(fileId, { button: btn, percent: 0 });
     } else {
@@ -328,7 +329,9 @@ requestAndDownloadBlob = async function(fileInfo) {
     } catch (error) {
         // Re-enable button on error if it exists
         if (btn && downloadProgressMap.has(fileId)) {
-            btn.disabled = false;
+            btn.removeAttribute('disabled');
+            btn.classList.remove('downloading');
+            if (btn.tagName === 'BUTTON') btn.disabled = false;
             btn.innerHTML = '<span class="material-icons" translate="no">download</span>';
             downloadProgressMap.delete(fileId);
         } else if (downloadProgressMap.has(fileId)) {
@@ -366,8 +369,10 @@ handleFileComplete = async function(data) {
         const entry = downloadProgressMap.get(fileId);
         // Only update button if it exists (might be null if header was collapsed)
         if (entry.button) {
-        entry.button.disabled = false;
-        entry.button.innerHTML = '<span class="material-icons" translate="no">open_in_new</span>';
+            entry.button.removeAttribute('disabled');
+            entry.button.classList.remove('downloading');
+            if (entry.button.tagName === 'BUTTON') entry.button.disabled = false;
+            entry.button.innerHTML = '<span class="material-icons" translate="no">open_in_new</span>';
         }
         // The open logic is already set in downloadBlob
         downloadProgressMap.delete(fileId);
@@ -1713,7 +1718,9 @@ async function finishPickerDownloadUI(fileId, meta) {
         listItem.classList.add('download-completed');
         const downloadButton = listItem.querySelector('.icon-button');
         if (downloadButton) {
-            downloadButton.disabled = false;
+            downloadButton.removeAttribute('disabled');
+            downloadButton.classList.remove('downloading');
+            if (downloadButton.tagName === 'BUTTON') downloadButton.disabled = false;
             downloadButton.classList.add('download-completed');
             downloadButton.innerHTML = '<span class="material-icons" translate="no">open_in_new</span>';
             downloadButton.title = 'Open file';
@@ -2653,7 +2660,9 @@ async function downloadAllReceivedFiles(peerId = null) {
                 const btn = li.querySelector('.icon-button');
                 if (btn) {
                     btn.classList.add('download-completed');
-                    btn.disabled = false;
+                    btn.removeAttribute('disabled');
+                    btn.classList.remove('downloading');
+                    if (btn.tagName === 'BUTTON') btn.disabled = false;
                     btn.innerHTML = '<span class="material-icons" translate="no">open_in_new</span>';
                     btn.title = 'File included in ZIP';
                     // Set onclick to show message (files in ZIP can't be opened individually)
@@ -4798,15 +4807,17 @@ function renderFileGroup(type, peerId = null) {
             const li = createFileListItem(fileInfo, type);
             
             const fileId = fileInfo.id;
-            const btn = li.querySelector('button.icon-button[data-file-id="' + fileId + '"]');
+            const btn = li.querySelector('.icon-button[data-file-id="' + fileId + '"]');
             
             // Restore completed state if file was downloaded
             if (completedFiles.has(fileId)) {
                 li.classList.add('download-completed');
                 if (btn) {
                     btn.classList.add('download-completed');
-                    btn.disabled = false;
-                    
+                    btn.removeAttribute('disabled');
+                    btn.classList.remove('downloading');
+                    if (btn.tagName === 'BUTTON') btn.disabled = false;
+
                     // Check if file was bulk downloaded (in ZIP) or individually downloaded
                     if (bulkDownloadedFiles.has(fileId)) {
                         // File was in bulk download ZIP - show appropriate message
@@ -4856,14 +4867,18 @@ function renderFileGroup(type, peerId = null) {
                     if (currentEntry) {
                         // Use the latest progress value from downloadProgressMap
                         const latestPercent = currentEntry.percent;
-                        btn.disabled = true; // Download in progress
+                        btn.setAttribute('disabled', '');
+                        btn.classList.add('downloading');
+                        if (btn.tagName === 'BUTTON') btn.disabled = true;
                         btn.innerHTML = `<span class='download-progress-text' translate="no">${latestPercent}%</span>`;
                         // Update downloadProgressMap with new button reference so future updateProgress calls work
                         downloadProgressMap.set(fileId, { button: btn, percent: latestPercent });
                     } else if (progressState.has(fileId)) {
                         // Fallback: use saved state if downloadProgressMap doesn't have it
                         const state = progressState.get(fileId);
-                        btn.disabled = state.disabled;
+                        btn.setAttribute('disabled', '');
+                        btn.classList.add('downloading');
+                        if (btn.tagName === 'BUTTON') btn.disabled = true;
                         btn.innerHTML = `<span class='download-progress-text' translate="no">${state.percent}%</span>`;
                         downloadProgressMap.set(fileId, { button: btn, percent: state.percent });
                     }
@@ -4926,14 +4941,24 @@ function createFileListItem(fileInfo, type) {
     info.appendChild(sizeSpan);
     info.appendChild(sharedBySpan);
     
-    const downloadBtn = document.createElement('button');
+    const downloadUrl = (type === 'received' && fileInfo.sharedBy) ? (() => {
+        const baseUrl = window.CONFIG?.BASE_URL || window.location.origin + '/';
+        return `${baseUrl}?peer=${encodeURIComponent(fileInfo.sharedBy)}&fileId=${encodeURIComponent(fileInfo.id)}&fileName=${encodeURIComponent(fileInfo.name)}`;
+    })() : null;
+
+    const downloadBtn = (type === 'received' && downloadUrl)
+        ? document.createElement('a')
+        : document.createElement('button');
     downloadBtn.className = 'icon-button';
     downloadBtn.title = 'Download file';
-    downloadBtn.setAttribute('data-file-id', fileInfo.id); // Required for progress tracking
+    downloadBtn.setAttribute('data-file-id', fileInfo.id);
     downloadBtn.innerHTML = '<span class="material-icons" translate="no">download</span>';
-    downloadBtn.onclick = async () => {
+    if (downloadUrl) downloadBtn.href = downloadUrl;
+
+    downloadBtn.onclick = async (e) => {
+        if (downloadUrl) e.preventDefault();
+        if (downloadBtn.hasAttribute('disabled') || downloadBtn.classList.contains('downloading')) return;
         try {
-            // Track download button click
             Analytics.track('file_download_clicked', {
                 file_size: fileInfo.size,
                 file_type: Analytics.getFileExtension(fileInfo.name),
@@ -4941,7 +4966,6 @@ function createFileListItem(fileInfo, type) {
                 download_type: type === 'sent' ? 'local_blob' : 'remote_request',
                 device_type: Analytics.getDeviceType()
             });
-            
             if (type === 'sent') {
                 const deferred = deferredFileMap.get(fileInfo.id);
                 const streaming = streamingFileMap.get(fileInfo.id);
@@ -4962,8 +4986,6 @@ function createFileListItem(fileInfo, type) {
         } catch (error) {
             console.error('Error downloading file:', error);
             showNotification('Failed to download file: ' + error.message, 'error');
-            
-            // Track download failure
             Analytics.track('file_download_failed', {
                 file_size: fileInfo.size,
                 file_type: Analytics.getFileExtension(fileInfo.name),
@@ -4972,28 +4994,11 @@ function createFileListItem(fileInfo, type) {
             });
         }
     };
-    
+
     li.appendChild(icon);
     li.appendChild(info);
     li.appendChild(downloadBtn);
 
-    // ext_download: Copy download link button (received files only)
-    if (type === 'received' && fileInfo.sharedBy) {
-        const linkBtn = document.createElement('button');
-        linkBtn.className = 'icon-button';
-        linkBtn.title = 'Copy download link';
-        linkBtn.innerHTML = '<span class="material-icons" translate="no">link</span>';
-        linkBtn.onclick = (e) => {
-            e.stopPropagation();
-            const baseUrl = window.CONFIG?.BASE_URL || window.location.origin + '/';
-            const url = `${baseUrl}?peer=${encodeURIComponent(fileInfo.sharedBy)}&fileId=${encodeURIComponent(fileInfo.id)}&fileName=${encodeURIComponent(fileInfo.name)}`;
-            navigator.clipboard.writeText(url).then(() => {
-                showNotification('Download link copied to clipboard', 'success');
-            }).catch(() => showNotification('Failed to copy link', 'error'));
-        };
-        li.appendChild(linkBtn);
-    }
-    
     return li;
 }
 
