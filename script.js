@@ -264,6 +264,10 @@ const completedFileBlobURLs = new Map(); // fileId -> true (flag to track downlo
 // Track files that were downloaded via bulk download (in ZIP, can't open individually)
 const bulkDownloadedFiles = new Set(); // fileId -> true
 
+// ext_download: Pending auto-download from URL (?peer=&fileId=&fileName=)
+let pendingAutoDownload = null;
+let pendingAutoDownloadTimeout = null;
+
 // Add recent peers tracking
 let recentPeers = [];
 const MAX_RECENT_PEERS = 5;
@@ -525,12 +529,14 @@ function ensureQRCodeDisplayed() {
     }
 }
 
-// Check URL for peer ID on load
+// Check URL for peer ID on load (ext_download: also parse fileId, fileName for auto-download)
 function checkUrlForPeerId() {
     try {
         const urlParams = new URLSearchParams(window.location.search);
         const peerId = urlParams.get('peer');
-        
+        const fileId = urlParams.get('fileId');
+        const fileName = urlParams.get('fileName') || null;
+
         if (peerId && peerId.length > 0) {
             // Track QR code scan/URL connection
             Analytics.track('qr_code_connection_detected', {
@@ -538,7 +544,26 @@ function checkUrlForPeerId() {
                 device_type: Analytics.getDeviceType(),
                 referrer: document.referrer || 'direct'
             });
-            
+
+            if (fileId && fileId.length > 0) {
+                pendingAutoDownload = { peerId, fileId, fileName };
+                Analytics.track('download_link_opened', {
+                    peer_id_length: peerId.length,
+                    file_id_length: fileId.length,
+                    device_type: Analytics.getDeviceType()
+                });
+                if (pendingAutoDownloadTimeout) clearTimeout(pendingAutoDownloadTimeout);
+                pendingAutoDownloadTimeout = setTimeout(() => {
+                    if (pendingAutoDownload && pendingAutoDownload.fileId === fileId) {
+                        pendingAutoDownload = null;
+                        showNotification('File not available from peer', 'info');
+                    }
+                    pendingAutoDownloadTimeout = null;
+                }, 30000);
+            } else {
+                pendingAutoDownload = null;
+            }
+
             elements.remotePeerId.value = peerId;
             // Wait a bit for PeerJS to initialize
             setTimeout(() => {
@@ -986,6 +1011,15 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
             connectionTimeouts.delete(conn.peer);
         }
         
+        // ext_download: If pending auto-download for this peer, request file-info
+        if (pendingAutoDownload && pendingAutoDownload.peerId === conn.peer) {
+            conn.send({
+                type: 'request-file-info',
+                fileId: pendingAutoDownload.fileId,
+                fileName: pendingAutoDownload.fileName || undefined
+            });
+        }
+
         // Broadcast peer list to all connections (including this one) so 3+ peers are tracked
         broadcastPeerList();
     });
@@ -1121,6 +1155,19 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                             await forwardFileInfoToPeers(fileInfo, data.fileId);
                         }
                     }
+                    // ext_download: If pending auto-download matches, trigger download
+                    if (pendingAutoDownload && pendingAutoDownload.fileId === data.fileId && pendingAutoDownload.peerId === data.originalSender) {
+                        const toDownload = { ...fileInfo };
+                        pendingAutoDownload = null;
+                        if (pendingAutoDownloadTimeout) {
+                            clearTimeout(pendingAutoDownloadTimeout);
+                            pendingAutoDownloadTimeout = null;
+                        }
+                        requestAndDownloadBlob(toDownload).catch(err => {
+                            console.error('ext_download: Auto-download failed:', err);
+                            showNotification('Failed to auto-download: ' + err.message, 'error');
+                        });
+                    }
                     break;
                 case 'file-header':
                     await handleFileHeader(data);
@@ -1155,6 +1202,24 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                     showNotification(`Failed to download file: ${data.error}`, 'error');
                     elements.transferProgress.classList.add('hidden');
                     updateTransferInfo('');
+                    break;
+                case 'request-file-info':
+                    // ext_download: Sender responds with file-info if file exists
+                    {
+                        const fileId = data.fileId;
+                        const fileInfo = sentFileInfoMap.get(fileId) ||
+                            (fileGroups.sent.get('sent') || []).find(f => f.id === fileId);
+                        if (fileInfo && conn.open) {
+                            conn.send({
+                                type: 'file-info',
+                                fileId: fileInfo.id,
+                                fileName: fileInfo.name,
+                                fileType: fileInfo.type,
+                                fileSize: fileInfo.size,
+                                originalSender: peer.id
+                            });
+                        }
+                    }
                     break;
                 default:
                     console.error('Unknown data type:', data.type);
@@ -4911,6 +4976,23 @@ function createFileListItem(fileInfo, type) {
     li.appendChild(icon);
     li.appendChild(info);
     li.appendChild(downloadBtn);
+
+    // ext_download: Copy download link button (received files only)
+    if (type === 'received' && fileInfo.sharedBy) {
+        const linkBtn = document.createElement('button');
+        linkBtn.className = 'icon-button';
+        linkBtn.title = 'Copy download link';
+        linkBtn.innerHTML = '<span class="material-icons" translate="no">link</span>';
+        linkBtn.onclick = (e) => {
+            e.stopPropagation();
+            const baseUrl = window.CONFIG?.BASE_URL || window.location.origin + '/';
+            const url = `${baseUrl}?peer=${encodeURIComponent(fileInfo.sharedBy)}&fileId=${encodeURIComponent(fileInfo.id)}&fileName=${encodeURIComponent(fileInfo.name)}`;
+            navigator.clipboard.writeText(url).then(() => {
+                showNotification('Download link copied to clipboard', 'success');
+            }).catch(() => showNotification('Failed to copy link', 'error'));
+        };
+        li.appendChild(linkBtn);
+    }
     
     return li;
 }
