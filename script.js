@@ -2143,6 +2143,11 @@ function supportsShowSaveFilePicker() {
     return typeof window.showSaveFilePicker === 'function';
 }
 
+/** Use save file picker for bulk download (single ZIP, streamed): Chrome/Edge, not iPhone/iPad. */
+function useSaveFilePickerForBulkDownload() {
+    return supportsShowSaveFilePicker() && !isIOS();
+}
+
 function isIOS() {
     const ua = navigator.userAgent || '';
     return /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -2329,6 +2334,118 @@ async function requestAndDownloadBlob(fileInfo) {
     }
 }
 
+/** Stream bulk files to a single ZIP via save file picker (no browser memory). Uses client-zip. */
+async function runStreamingZipToPickerFlow(undownloadedFiles, peerId) {
+    const totalFiles = undownloadedFiles.length;
+    let completed = 0;
+
+    // Suggested ZIP filename (same as ZipPartManager convention)
+    const timestamp = zipPartManager ? zipPartManager.getTimestampString() : new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+    const zipFileName = `One-Host-${timestamp}.zip`;
+
+    let fileHandle;
+    try {
+        fileHandle = await window.showSaveFilePicker({ suggestedName: zipFileName });
+    } catch (pickerErr) {
+        if (pickerErr.name === 'AbortError') {
+            showNotification('Download cancelled', 'info');
+        } else {
+            showNotification(`Could not save file: ${pickerErr.message}`, 'error');
+        }
+        return;
+    }
+
+    const writable = await fileHandle.createWritable();
+    showOrUpdateProgressNotification('downloading', 0, totalFiles, 'downloading');
+
+    // Unique filenames in ZIP (handle duplicates)
+    const usedNames = new Map();
+    function getUniqueZipName(name) {
+        let n = name;
+        let c = 1;
+        while (usedNames.has(n)) {
+            const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+            const base = name.includes('.') ? name.slice(0, name.lastIndexOf('.')) : name;
+            n = `${base} (${c})${ext}`;
+            c++;
+        }
+        usedNames.set(n, true);
+        return n;
+    }
+
+    try {
+        const { downloadZip } = await import('https://cdn.jsdelivr.net/npm/client-zip@2.5.0/index.js');
+
+        async function* fileInputs() {
+            for (const fileInfo of undownloadedFiles) {
+                const blob = await requestBlobFromPeer(fileInfo);
+                yield {
+                    name: getUniqueZipName(fileInfo.name || 'file'),
+                    lastModified: new Date(),
+                    input: blob
+                };
+                completed++;
+                showOrUpdateProgressNotification('downloading', completed, totalFiles, 'downloading');
+            }
+        }
+
+        const response = downloadZip(fileInputs());
+        await response.body.pipeTo(writable);
+        await writable.close();
+
+        // Mark all as bulk downloaded
+        undownloadedFiles.forEach(f => bulkDownloadedFiles.add(f.id));
+
+        // Update DOM: mark each file as download-completed
+        undownloadedFiles.forEach(fileInfo => {
+            const listItem = document.querySelector(`li.file-item[data-file-id="${fileInfo.id}"]`);
+            if (listItem) {
+                listItem.classList.add('download-completed');
+                const btn = listItem.querySelector('.icon-button');
+                if (btn) {
+                    btn.classList.remove('downloading');
+                    btn.classList.add('download-completed');
+                    btn.innerHTML = '<span class="material-icons" translate="no">open_in_new</span>';
+                    btn.title = 'File included in ZIP archive';
+                    btn.onclick = () => showNotification('This file was downloaded in a ZIP archive. Check your saved file location.', 'info');
+                }
+            }
+        });
+
+        updateBulkDownloadButtonState();
+        if (peerId) updatePeerBulkDownloadButtonState(peerId);
+
+        showNotification(`Successfully downloaded ${totalFiles} file(s) as ZIP`, 'success');
+        Analytics.track('bulk_download_completed', {
+            total_files: totalFiles,
+            success_count: totalFiles,
+            fail_count: 0,
+            parts_created: 1,
+            device_type: Analytics.getDeviceType(),
+            download_method: 'streaming_picker'
+        });
+    } catch (error) {
+        console.error('Streaming bulk download error:', error);
+        try { await writable.abort(); } catch (_) {}
+        showNotification(`Failed to download: ${error.message}`, 'error');
+        Analytics.track('bulk_download_failed', {
+            error_message: error.message,
+            device_type: Analytics.getDeviceType(),
+            download_method: 'streaming_picker'
+        });
+    } finally {
+        showOrUpdateProgressNotification('downloading', completed, totalFiles, 'downloading', true);
+        if (peerId) {
+            const peerBtn = document.getElementById(`bulk-download-peer-${peerId}`);
+            if (peerBtn) peerBtn.disabled = false;
+            updatePeerBulkDownloadButtonState(peerId);
+        } else {
+            if (elements.bulkDownloadReceived) elements.bulkDownloadReceived.disabled = false;
+            updateBulkDownloadButtonState();
+        }
+    }
+}
+
 // Function to download all received files that haven't been downloaded yet
 // If peerId is provided, downloads only files from that peer
 // If peerId is null/undefined, downloads files from all peers (existing behavior)
@@ -2447,7 +2564,13 @@ async function downloadAllReceivedFiles(peerId = null) {
         }
     }
 
-    // Track bulk download initiation
+    // Non-iOS with showSaveFilePicker: single ZIP streamed to picker (no browser memory)
+    if (useSaveFilePickerForBulkDownload()) {
+        await runStreamingZipToPickerFlow(undownloadedFiles, peerId);
+        return;
+    }
+
+    // Track bulk download initiation (iOS / fallback path)
     Analytics.track('bulk_download_initiated', {
         file_count: fileItems.length,
         device_type: Analytics.getDeviceType(),
