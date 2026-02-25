@@ -6,6 +6,12 @@ const STORE_NAME = window.CONFIG?.STORE_NAME || 'files';
 const KEEP_ALIVE_INTERVAL = window.CONFIG?.KEEP_ALIVE_INTERVAL || 30000;
 const CONNECTION_TIMEOUT = window.CONFIG?.CONNECTION_TIMEOUT || 60000;
 
+// Configure StreamSaver (when available) to use hosted MITM page for streaming downloads.
+if (window.streamSaver && !streamSaver.mitm) {
+    // Uses official hosted MITM helper, avoids interfering with app's own service worker.
+    streamSaver.mitm = 'https://jimmywarting.github.io/StreamSaver.js/mitm.html';
+}
+
 // Analytics Helper Functions
 const Analytics = {
     // Safe tracking wrapper that never breaks functionality
@@ -171,6 +177,7 @@ let transferInProgress = false;
 let isConnectionReady = false;
 let fileChunks = {}; // Initialize fileChunks object
 const pickerDownloadMap = new Map(); // fileId -> { writable, fileName, fileType, fileSize, receivedSize, originalSender }
+const streamSaverDownloadMap = new Map(); // fileId -> { writer, fileName, fileType, fileSize, receivedSize, originalSender }
 let keepAliveInterval = null;
 let signalingServerKeepAliveInterval = null; // For Android-specific signaling server keep-alive
 let connectionTimeouts = new Map();
@@ -1204,6 +1211,17 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                         pickerDownloadMap.delete(data.fileId);
                         try { await entry.writable.close(); } catch (_) {}
                     }
+                    if (streamSaverDownloadMap.has(data.fileId)) {
+                        const ssEntry = streamSaverDownloadMap.get(data.fileId);
+                        streamSaverDownloadMap.delete(data.fileId);
+                        try {
+                            if (typeof ssEntry.writer.abort === 'function') {
+                                await ssEntry.writer.abort();
+                            } else if (typeof ssEntry.writer.close === 'function') {
+                                await ssEntry.writer.close();
+                            }
+                        } catch (_) {}
+                    }
                     showNotification(`Failed to download file: ${data.error}`, 'error');
                     elements.transferProgress.classList.add('hidden');
                     updateTransferInfo('');
@@ -1424,7 +1442,15 @@ async function handleFileHeader(data) {
         return; // Don't process as regular file download
     }
     
-    if (pickerDownloadMap.has(data.fileId)) {
+    if (streamSaverDownloadMap.has(data.fileId)) {
+        const entry = streamSaverDownloadMap.get(data.fileId);
+        entry.fileName = data.fileName;
+        entry.fileType = data.fileType;
+        entry.fileSize = data.fileSize;
+        entry.originalSender = data.originalSender;
+        entry.receivedSize = 0;
+        entry.lastProgressUpdate = 0;
+    } else if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
         entry.fileName = data.fileName;
         entry.fileType = data.fileType;
@@ -1457,6 +1483,37 @@ async function handleFileChunk(data) {
         return; // Don't process as regular file download
     }
     
+    // StreamSaver sink: stream chunks directly to browser-managed download
+    if (streamSaverDownloadMap.has(data.fileId)) {
+        const entry = streamSaverDownloadMap.get(data.fileId);
+        const chunk = data.data;
+        try {
+            await entry.writer.write(new Uint8Array(chunk));
+        } catch (err) {
+            console.error('Error streaming chunk to download:', err);
+            showNotification('Error writing file to disk', 'error');
+            try {
+                if (typeof entry.writer.abort === 'function') {
+                    await entry.writer.abort();
+                } else if (typeof entry.writer.close === 'function') {
+                    await entry.writer.close();
+                }
+            } catch (_) {}
+            streamSaverDownloadMap.delete(data.fileId);
+            return;
+        }
+        entry.receivedSize += chunk.byteLength;
+        if (entry.fileSize && entry.fileSize > 0) {
+            const currentProgress = (entry.receivedSize / entry.fileSize) * 100;
+            if (!entry.lastProgressUpdate || currentProgress - entry.lastProgressUpdate >= 1) {
+                updateProgress(currentProgress, data.fileId);
+                entry.lastProgressUpdate = currentProgress;
+            }
+        }
+        return;
+    }
+    
+    // File System Access API sink (saveFilePicker)
     if (pickerDownloadMap.has(data.fileId)) {
         const entry = pickerDownloadMap.get(data.fileId);
         const chunk = data.data;
@@ -1503,6 +1560,7 @@ async function handleFileChunk(data) {
         return;
     }
 
+    // In-memory sink (fallback): accumulate chunks into array, then Blob + downloadBlob at completion
     const fileData = fileChunks[data.fileId];
     if (!fileData) return;
 
@@ -1734,6 +1792,53 @@ async function finishPickerDownloadUI(fileId, meta) {
             downloadButton.onclick = () => {
                 Analytics.track('file_open_clicked', { file_size: meta.fileSize, file_type: Analytics.getFileExtension(meta.fileName), device_type: Analytics.getDeviceType() });
                 showNotification('Please check your saved file location', 'info');
+            };
+        }
+        updateBulkDownloadButtonState();
+    }
+    const fileInfo = { name: meta.fileName, type: meta.fileType, size: meta.fileSize, id: fileId, sharedBy: meta.originalSender };
+    if (!fileHistory.sent.has(fileId) && !fileHistory.received.has(fileId)) {
+        receivedFileInfoMap.set(fileId, fileInfo);
+        addFileToHistory(fileInfo, 'received');
+        if (connections.size > 1) await forwardFileInfoToPeers(fileInfo, fileId);
+    }
+}
+
+// Finish UI updates for a StreamSaver-based download (browser download manager entry).
+async function finishStreamSaverDownloadUI(fileId, meta) {
+    if (bulkDownloadProgress.isBulkDownload && bulkDownloadProgress.total > 0) {
+        bulkDownloadProgress.completed++;
+        showOrUpdateProgressNotification('downloading', bulkDownloadProgress.completed, bulkDownloadProgress.total, 'downloading');
+    } else {
+        showNotification(`Downloaded ${meta.fileName}`, 'success');
+    }
+    Analytics.track('file_downloaded_successfully', {
+        file_size: meta.fileSize,
+        file_type: Analytics.getFileExtension(meta.fileName),
+        file_size_category: Analytics.getFileSizeCategory(meta.fileSize),
+        device_type: Analytics.getDeviceType()
+    });
+    const listItem = document.querySelector(`[data-file-id="${fileId}"]`);
+    if (listItem) {
+        listItem.classList.add('download-completed');
+        const downloadButton = listItem.querySelector('.icon-button');
+        if (downloadButton) {
+            downloadButton.removeAttribute('disabled');
+            downloadButton.classList.remove('downloading');
+            if (downloadButton.tagName === 'BUTTON') downloadButton.disabled = false;
+            downloadButton.classList.add('download-completed');
+            downloadButton.innerHTML = '<span class="material-icons" translate="no">open_in_new</span>';
+            downloadButton.title = 'Open file';
+            downloadProgressMap.delete(fileId);
+            if (completedFileBlobURLs.has(fileId)) {
+                const v = completedFileBlobURLs.get(fileId);
+                if (typeof v === 'string') { URL.revokeObjectURL(v); activeBlobURLs.delete(v); }
+                completedFileBlobURLs.delete(fileId);
+            }
+            completedFileBlobURLs.set(fileId, true);
+            downloadButton.onclick = () => {
+                Analytics.track('file_open_clicked', { file_size: meta.fileSize, file_type: Analytics.getFileExtension(meta.fileName), device_type: Analytics.getDeviceType() });
+                showNotification('Please check your Downloads folder', 'info');
             };
         }
         updateBulkDownloadButtonState();
@@ -2143,6 +2248,14 @@ function supportsShowSaveFilePicker() {
     return typeof window.showSaveFilePicker === 'function';
 }
 
+// StreamSaver (ReadableStream -> browser download) is available when WritableStream, service workers,
+// and the global streamSaver helper are present. Used for non-iOS bulk/individual downloads.
+function supportsStreamSaverDownload() {
+    return typeof streamSaver !== 'undefined'
+        && typeof WritableStream !== 'undefined'
+        && 'serviceWorker' in navigator;
+}
+
 /** Use save file picker for bulk download (single ZIP, streamed): Chrome/Edge, not iPhone/iPad. */
 function useSaveFilePickerForBulkDownload() {
     return supportsShowSaveFilePicker() && !isIOS();
@@ -2244,10 +2357,33 @@ async function openFilesWithPicker() {
 async function requestAndDownloadBlob(fileInfo) {
     try {
         const threshold = window.CONFIG?.FILE_PICKER_SIZE_THRESHOLD ?? 400 * 1024 * 1024;
-        const usePicker = supportsShowSaveFilePicker() && (fileInfo.size || 0) > threshold;
+        const size = fileInfo.size || 0;
+        const useStreamSaverSink = !isIOS() && supportsStreamSaverDownload() && size > 0 && size <= threshold;
+        const usePicker = !useStreamSaverSink && supportsShowSaveFilePicker() && size > threshold;
 
         let fileHandle = null;
         let writable = null;
+        if (useStreamSaverSink) {
+            try {
+                const fileName = fileInfo.name || 'download';
+                const options = size > 0 ? { size } : undefined;
+                const fileStream = streamSaver.createWriteStream(fileName, options);
+                const writer = fileStream.getWriter ? fileStream.getWriter() : fileStream;
+                streamSaverDownloadMap.set(fileInfo.id, {
+                    writer,
+                    fileName,
+                    fileType: fileInfo.type || 'application/octet-stream',
+                    fileSize: size,
+                    receivedSize: 0,
+                    originalSender: fileInfo.sharedBy,
+                    lastProgressUpdate: 0
+                });
+                console.log(`📥 individual_download: StreamSaver sink for fileId=${fileInfo.id}, name=${fileName}, size=${size}`);
+            } catch (err) {
+                console.warn('StreamSaver createWriteStream failed, falling back to other download methods:', err);
+            }
+        }
+
         if (usePicker) {
             try {
                 fileHandle = await window.showSaveFilePicker({ suggestedName: fileInfo.name });
@@ -2262,6 +2398,7 @@ async function requestAndDownloadBlob(fileInfo) {
                     originalSender: fileInfo.sharedBy,
                     lastProgressUpdate: 0
                 });
+                console.log(`📥 individual_download: save-file-picker sink for fileId=${fileInfo.id}, name=${fileInfo.name}, size=${size}`);
             } catch (pickerErr) {
                 if (pickerErr.name === 'AbortError') {
                     showNotification('Download cancelled', 'info');
@@ -2331,6 +2468,105 @@ async function requestAndDownloadBlob(fileInfo) {
         showNotification(`Failed to download file: ${error.message}`, 'error');
         elements.transferProgress.classList.add('hidden');
         updateTransferInfo('');
+    }
+}
+
+/** Stream bulk files to a single ZIP via StreamSaver (browser download manager). Uses client-zip. */
+async function runStreamSaverBulkDownload(undownloadedFiles, peerId) {
+    const totalFiles = undownloadedFiles.length;
+    let completed = 0;
+
+    // Suggested ZIP filename (same as ZipPartManager convention)
+    const timestamp = zipPartManager ? zipPartManager.getTimestampString() : new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
+    const zipFileName = `One-Host-${timestamp}.zip`;
+
+    showOrUpdateProgressNotification('downloading', 0, totalFiles, 'downloading');
+
+    // Unique filenames in ZIP (handle duplicates)
+    const usedNames = new Map();
+    function getUniqueZipName(name) {
+        let n = name;
+        let c = 1;
+        while (usedNames.has(n)) {
+            const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+            const base = name.includes('.') ? name.slice(0, name.lastIndexOf('.')) : name;
+            n = `${base} (${c})${ext}`;
+            c++;
+        }
+        usedNames.set(n, true);
+        return n;
+    }
+
+    try {
+        const { downloadZip } = await import('https://cdn.jsdelivr.net/npm/client-zip@2.5.0/index.js');
+
+        async function* fileInputs() {
+            for (const fileInfo of undownloadedFiles) {
+                const blob = await requestBlobFromPeer(fileInfo);
+                yield {
+                    name: getUniqueZipName(fileInfo.name || 'file'),
+                    lastModified: new Date(),
+                    input: blob
+                };
+                completed++;
+                showOrUpdateProgressNotification('downloading', completed, totalFiles, 'downloading');
+            }
+        }
+
+        const fileStream = streamSaver.createWriteStream(zipFileName);
+        console.log(`📦 bulk_download: StreamSaver createWriteStream for ZIP ${zipFileName}, files=${totalFiles}`);
+        const response = downloadZip(fileInputs());
+        await response.body.pipeTo(fileStream);
+
+        // Mark all as bulk downloaded
+        undownloadedFiles.forEach(f => bulkDownloadedFiles.add(f.id));
+
+        // Update DOM: mark each file as download-completed
+        undownloadedFiles.forEach(fileInfo => {
+            const listItem = document.querySelector(`li.file-item[data-file-id="${fileInfo.id}"]`);
+            if (listItem) {
+                listItem.classList.add('download-completed');
+                const btn = listItem.querySelector('.icon-button');
+                if (btn) {
+                    btn.classList.remove('downloading');
+                    btn.classList.add('download-completed');
+                    btn.innerHTML = '<span class="material-icons" translate="no">open_in_new</span>';
+                    btn.title = 'File included in ZIP archive';
+                    btn.onclick = () => showNotification('This file was downloaded in a ZIP archive. Check your Downloads folder.', 'info');
+                }
+            }
+        });
+
+        updateBulkDownloadButtonState();
+        if (peerId) updatePeerBulkDownloadButtonState(peerId);
+
+        showNotification(`Successfully downloaded ${totalFiles} file(s) as ZIP`, 'success');
+        Analytics.track('bulk_download_completed', {
+            total_files: totalFiles,
+            success_count: totalFiles,
+            fail_count: 0,
+            parts_created: 1,
+            device_type: Analytics.getDeviceType(),
+            download_method: 'streaming_streamsaver'
+        });
+    } catch (error) {
+        console.error('StreamSaver bulk download error:', error);
+        showNotification(`Failed to download: ${error.message}`, 'error');
+        Analytics.track('bulk_download_failed', {
+            error_message: error.message,
+            device_type: Analytics.getDeviceType(),
+            download_method: 'streaming_streamsaver'
+        });
+    } finally {
+        showOrUpdateProgressNotification('downloading', completed, totalFiles, 'downloading', true);
+        if (peerId) {
+            const peerBtn = document.getElementById(`bulk-download-peer-${peerId}`);
+            if (peerBtn) peerBtn.disabled = false;
+            updatePeerBulkDownloadButtonState(peerId);
+        } else {
+            if (elements.bulkDownloadReceived) elements.bulkDownloadReceived.disabled = false;
+            updateBulkDownloadButtonState();
+        }
     }
 }
 
@@ -2564,8 +2800,16 @@ async function downloadAllReceivedFiles(peerId = null) {
         }
     }
 
+    // Non-iOS with StreamSaver: single ZIP streamed to browser download manager.
+    if (!isIOS() && supportsStreamSaverDownload()) {
+        console.log(`📦 bulk_download: using StreamSaver (streaming_streamsaver) for ${undownloadedFiles.length} files, peerId=${peerId || 'ALL'}`);
+        await runStreamSaverBulkDownload(undownloadedFiles, peerId);
+        return;
+    }
+
     // Non-iOS with showSaveFilePicker: single ZIP streamed to picker (no browser memory)
     if (useSaveFilePickerForBulkDownload()) {
+        console.log(`📦 bulk_download: using save-file-picker (streaming_picker) for ${undownloadedFiles.length} files, peerId=${peerId || 'ALL'}`);
         await runStreamingZipToPickerFlow(undownloadedFiles, peerId);
         return;
     }
@@ -5563,6 +5807,16 @@ function handleBeforeUnload(event) {
         try { entry.writable.close(); } catch (_) {}
     }
     pickerDownloadMap.clear();
+    for (const [, ssEntry] of streamSaverDownloadMap) {
+        try {
+            if (typeof ssEntry.writer.abort === 'function') {
+                ssEntry.writer.abort();
+            } else if (typeof ssEntry.writer.close === 'function') {
+                ssEntry.writer.close();
+            }
+        } catch (_) {}
+    }
+    streamSaverDownloadMap.clear();
     deferredFileMap.clear();
     streamingFileMap.clear();
 }
