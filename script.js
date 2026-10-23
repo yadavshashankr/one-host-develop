@@ -3622,8 +3622,8 @@ style.textContent = `
     }
     
     .notification.info {
-        background-color: #e0f2fe;
-        color: #0369a1;
+        background-color: var(--info-background);
+        color: var(--info-text-color);
     }
     
     @keyframes slideIn {
