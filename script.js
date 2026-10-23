@@ -421,6 +421,22 @@ window.addEventListener('themechange', () => {
     }
 });
 
+// Play the header logo animation on every page load, including refreshes.
+// Browsers can reuse an already-finished GIF from memory on refresh, so it would just show
+// the last frame. A fresh object URL makes the browser treat it as a new image and play it
+// from the start. The GIF opens with a short still pause, so the swap isn't visible.
+(async function restartLogoAnimation() {
+    const logo = document.querySelector('.logo');
+    // Static logo is shown when the device asks for reduced motion
+    if (!logo || !logo.currentSrc.includes('logo-animated.gif')) return;
+    try {
+        const response = await fetch(logo.currentSrc);
+        logo.src = URL.createObjectURL(await response.blob());
+    } catch (error) {
+        console.debug('Logo animation restart skipped:', error);
+    }
+})();
+
 // Generate QR Code
 function generateQRCode(peerId) {
     try {
