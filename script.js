@@ -421,30 +421,6 @@ window.addEventListener('themechange', () => {
     }
 });
 
-// Replay the header logo animation when the user flips the theme switch.
-// The GIF plays once; giving the <img> a fresh object URL restarts it without re-downloading.
-let logoAnimationBlob = null;
-let logoAnimationUrl = null;
-
-window.addEventListener('themetoggle', async () => {
-    const logo = document.querySelector('.logo');
-    // Static logo is shown when the device asks for reduced motion
-    if (!logo || (!logo.currentSrc.includes('logo-animated.gif') && !logo.currentSrc.startsWith('blob:'))) return;
-
-    try {
-        if (!logoAnimationBlob) {
-            const response = await fetch('assets/logo-animated.gif');
-            logoAnimationBlob = await response.blob();
-        }
-        const previousUrl = logoAnimationUrl;
-        logoAnimationUrl = URL.createObjectURL(logoAnimationBlob);
-        logo.src = logoAnimationUrl;
-        if (previousUrl) URL.revokeObjectURL(previousUrl);
-    } catch (error) {
-        console.debug('Logo animation replay skipped:', error);
-    }
-});
-
 // Generate QR Code
 function generateQRCode(peerId) {
     try {
