@@ -66,8 +66,8 @@
         --info-text-color: #9fd3fb;
         --mono-icon-filter: invert(1);
         --logo-filter: brightness(1.35) saturate(1.1);
-        --qr-module-color: #ffffff;
-        --qr-background: #1e2126;
+        --qr-module-color: #0d2b4e;
+        --qr-background: #e3f2fd;
         color-scheme: dark;
     }
 }
@@ -101,8 +101,8 @@
     --info-text-color: #9fd3fb;
     --mono-icon-filter: invert(1);
     --logo-filter: brightness(1.35) saturate(1.1);
-    --qr-module-color: #ffffff;
-    --qr-background: #1e2126;
+    --qr-module-color: #0d2b4e;
+    --qr-background: #e3f2fd;
     color-scheme: dark;
 }
 
