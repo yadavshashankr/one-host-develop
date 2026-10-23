@@ -683,9 +683,17 @@ h3 {
 }
 
 #qrcode {
-    padding: 10px;
+    padding: 16px; /* Quiet zone: about 4 squares, as scanners expect */
     background: var(--qr-background);
     border-radius: 4px;
+}
+
+/* The QR is drawn at 800px (script.js) and scaled down here so it stays sharp */
+#qrcode img,
+#qrcode canvas {
+    width: 164px;
+    height: 164px;
+    max-width: 100%;
 }
 
 /* Connect peer styles */

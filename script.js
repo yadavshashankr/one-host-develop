@@ -453,13 +453,16 @@ function generateQRCode(peerId) {
         const qrModuleColor = rootStyle.getPropertyValue('--qr-module-color').trim() || '#2196F3';
         const qrBackground = rootStyle.getPropertyValue('--qr-background').trim() || '#ffffff';
 
+        // Drawn at 4x and shown at 164px (see #qrcode in style.css) so square edges stay sharp
+        // on high-density screens. Level M keeps the code less dense than H, so each square is
+        // bigger and easier for a phone camera to read off a screen.
         new QRCode(elements.qrcode, {
             text: qrUrl,
-            width: 128,
-            height: 128,
+            width: 800,
+            height: 800,
             colorDark: qrModuleColor,
             colorLight: qrBackground,
-            correctLevel: QRCode.CorrectLevel.H
+            correctLevel: QRCode.CorrectLevel.M
         });
         lastQRCodePeerId = peerId;
     } catch (error) {
