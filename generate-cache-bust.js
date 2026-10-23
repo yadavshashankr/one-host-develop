@@ -50,9 +50,9 @@ function updateIndexHtml(versionHash) {
                 pattern: /(<link[^>]*href=["'])(style\.css)(\?v=[\w\d]+)?(["'][^>]*>)/gi,
                 replacement: `$1$2?v=${versionHash}$4`
             },
-            // constants.js - handle src="js/config/constants.js" or src='js/config/constants.js', with or without existing ?v=
+            // js/config/*.js and js/services/*.js - e.g. src="js/config/constants.js" or src='js/services/themeManager.js', with or without existing ?v=
             {
-                pattern: /(<script[^>]*src=["'])(js\/config\/constants\.js)(\?v=[\w\d]+)?(["'][^>]*>)/gi,
+                pattern: /(<script[^>]*src=["'])(js\/(?:config|services)\/[\w-]+\.js)(\?v=[\w\d]+)?(["'][^>]*>)/gi,
                 replacement: `$1$2?v=${versionHash}$4`
             },
             // script.js - handle src="script.js" or src='script.js', with or without existing ?v=
