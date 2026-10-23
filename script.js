@@ -411,6 +411,16 @@ async function initIndexedDB() {
     }
 }
 
+// Peer ID the QR code was last drawn for, so it can be redrawn in the new theme's colours
+let lastQRCodePeerId = null;
+
+// Redraw the QR code when the theme changes (event from js/services/themeManager.js)
+window.addEventListener('themechange', () => {
+    if (lastQRCodePeerId && isQRCodePresent()) {
+        generateQRCode(lastQRCodePeerId);
+    }
+});
+
 // Generate QR Code
 function generateQRCode(peerId) {
     try {
@@ -437,15 +447,21 @@ function generateQRCode(peerId) {
         }
         
         const qrUrl = `${baseUrl}?peer=${peerId}`;
-        
+
+        // Colours follow the theme: blue on white in light, white on the card colour in dark
+        const rootStyle = getComputedStyle(document.documentElement);
+        const qrModuleColor = rootStyle.getPropertyValue('--qr-module-color').trim() || '#2196F3';
+        const qrBackground = rootStyle.getPropertyValue('--qr-background').trim() || '#ffffff';
+
         new QRCode(elements.qrcode, {
             text: qrUrl,
             width: 128,
             height: 128,
-            colorDark: '#2196F3',
-            colorLight: '#ffffff',
+            colorDark: qrModuleColor,
+            colorLight: qrBackground,
             correctLevel: QRCode.CorrectLevel.H
         });
+        lastQRCodePeerId = peerId;
     } catch (error) {
         console.error('QR Code Generation Error:', error);
     }

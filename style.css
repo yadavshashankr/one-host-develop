@@ -29,6 +29,8 @@
     --info-text-color: #0369a1;
     --mono-icon-filter: none;
     --logo-filter: none;
+    --qr-module-color: #2196F3;
+    --qr-background: #ffffff;
     color-scheme: light;
 }
 
@@ -64,6 +66,8 @@
         --info-text-color: #9fd3fb;
         --mono-icon-filter: invert(1);
         --logo-filter: brightness(1.35) saturate(1.1);
+        --qr-module-color: #ffffff;
+        --qr-background: #1e2126;
         color-scheme: dark;
     }
 }
@@ -97,6 +101,8 @@
     --info-text-color: #9fd3fb;
     --mono-icon-filter: invert(1);
     --logo-filter: brightness(1.35) saturate(1.1);
+    --qr-module-color: #ffffff;
+    --qr-background: #1e2126;
     color-scheme: dark;
 }
 
@@ -648,7 +654,7 @@ h3 {
 
 #qrcode {
     padding: 10px;
-    background: white;
+    background: var(--qr-background);
     border-radius: 4px;
 }
 

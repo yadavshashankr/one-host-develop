@@ -103,6 +103,11 @@ class ThemeManager {
             this.toggleButton.setAttribute('aria-checked', String(isDark));
             this.toggleButton.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
         }
+
+        // Let parts drawn in JS (e.g. the QR code) pick up the new colours
+        window.dispatchEvent(new CustomEvent('themechange', {
+            detail: { theme: this.getEffectiveTheme() }
+        }));
     }
 }
 
