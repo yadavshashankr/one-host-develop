@@ -13,6 +13,7 @@ class ThemeManager {
         this.savedTheme = this.getSavedTheme(); // 'light', 'dark' or null (follow device)
         this.toggleButton = null;
         this.toggleIcon = null;
+        this.fadeTimeout = null;
     }
 
     init() {
@@ -40,6 +41,65 @@ class ThemeManager {
             e.stopPropagation(); // Keep the social media menu open
             this.toggle();
         });
+    }
+
+    prefersReducedMotion() {
+        return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    }
+
+    // Switch themes with an animation. Only used for taps on the switch;
+    // page load and device theme changes switch instantly.
+    animateThemeChange(apply) {
+        if (this.prefersReducedMotion()) {
+            apply();
+            return;
+        }
+
+        // Knob: sun spins into moon (or back)
+        if (this.toggleIcon) {
+            this.toggleIcon.classList.remove('theme-icon-spin');
+            void this.toggleIcon.offsetWidth; // Restart the animation
+            this.toggleIcon.classList.add('theme-icon-spin');
+        }
+
+        // Page: new theme grows out of the switch as a circle (View Transitions API)
+        if (document.startViewTransition && this.toggleButton) {
+            // Start from the knob where it sits at the moment of the tap, before it slides across
+            const knob = this.toggleButton.querySelector('.theme-switch-knob') || this.toggleButton;
+            const rect = knob.getBoundingClientRect();
+            const x = rect.left + rect.width / 2;
+            const y = rect.top + rect.height / 2;
+            const radius = Math.hypot(
+                Math.max(x, window.innerWidth - x),
+                Math.max(y, window.innerHeight - y)
+            );
+
+            const transition = document.startViewTransition(apply);
+            transition.ready.then(() => {
+                document.documentElement.animate(
+                    {
+                        clipPath: [
+                            `circle(0px at ${x}px ${y}px)`,
+                            `circle(${radius}px at ${x}px ${y}px)`
+                        ]
+                    },
+                    {
+                        // Ease in so the circle is visibly born at the knob before it speeds up
+                        duration: 700,
+                        easing: 'cubic-bezier(0.65, 0, 0.35, 1)',
+                        pseudoElement: '::view-transition-new(root)'
+                    }
+                );
+            }).catch(() => {});
+            return;
+        }
+
+        // Fallback for browsers without View Transitions (e.g. Firefox): cross-fade colours
+        const root = document.documentElement;
+        root.classList.add('theme-fading');
+        apply();
+        clearTimeout(this.fadeTimeout);
+        this.fadeTimeout = setTimeout(() => root.classList.remove('theme-fading'), 350);
     }
 
     getSystemTheme() {
@@ -77,7 +137,7 @@ class ThemeManager {
             console.debug('Theme preference not saved:', error);
         }
 
-        this.applyTheme();
+        this.animateThemeChange(() => this.applyTheme());
 
         if (typeof Analytics !== 'undefined') {
             Analytics.track('theme_changed', {

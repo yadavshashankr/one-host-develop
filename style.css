@@ -466,6 +466,36 @@ header {
     color: var(--primary-color);
 }
 
+/* Theme change animations (js/services/themeManager.js) */
+.theme-switch-knob .material-icons.theme-icon-spin {
+    animation: theme-icon-spin 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes theme-icon-spin {
+    from { transform: rotate(-180deg) scale(0.4); opacity: 0.4; }
+    to { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+
+/* Circular reveal: the script animates the new snapshot's clip-path, so turn off the default cross-fade */
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+}
+
+/* Fallback cross-fade for browsers without View Transitions; the switch keeps its own transitions */
+:root.theme-fading *:not(.theme-switch):not(.theme-switch *),
+:root.theme-fading *:not(.theme-switch):not(.theme-switch *)::before,
+:root.theme-fading *:not(.theme-switch):not(.theme-switch *)::after {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .theme-switch-knob .material-icons.theme-icon-spin {
+        animation: none;
+    }
+}
+
 h1 {
     color: var(--primary-color);
     margin-bottom: 1rem;
