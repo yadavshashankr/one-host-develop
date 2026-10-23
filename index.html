@@ -66,7 +66,7 @@
       }
     } catch (e) {}
   </script>
-  <link rel="stylesheet" href="style.css?v=1c5ad5f" />
+  <link rel="stylesheet" href="style.css?v=59f4596" />
   <link rel="manifest" href="manifest.json">
   
   <!-- Google Analytics -->
@@ -79,23 +79,23 @@
   </script>
   
   <!-- Configuration -->
-  <script src="js/config/constants.js?v=1c5ad5f"></script>
+  <script src="js/config/constants.js?v=59f4596"></script>
   <!-- Screen Wake Manager -->
-  <script src="js/services/screenWake.js?v=1c5ad5f"></script>
+  <script src="js/services/screenWake.js?v=59f4596"></script>
   <!-- Device Manager -->
-  <script src="js/services/deviceManager.js?v=1c5ad5f"></script>
+  <script src="js/services/deviceManager.js?v=59f4596"></script>
   <!-- Memory Monitor -->
-  <script src="js/services/memoryMonitor.js?v=1c5ad5f"></script>
+  <script src="js/services/memoryMonitor.js?v=59f4596"></script>
   <!-- ZIP Part Manager -->
-  <script src="js/services/zipPartManager.js?v=1c5ad5f"></script>
+  <script src="js/services/zipPartManager.js?v=59f4596"></script>
   <!-- Bulk Download Manager -->
-  <script src="js/services/bulkDownloadManager.js?v=1c5ad5f"></script>
+  <script src="js/services/bulkDownloadManager.js?v=59f4596"></script>
   <!-- Session State Manager -->
-  <script src="js/services/sessionStateManager.js?v=1c5ad5f"></script>
+  <script src="js/services/sessionStateManager.js?v=59f4596"></script>
   <!-- Reconnection Manager -->
-  <script src="js/services/reconnectionManager.js?v=1c5ad5f"></script>
+  <script src="js/services/reconnectionManager.js?v=59f4596"></script>
   <!-- Theme Manager -->
-  <script src="js/services/themeManager.js?v=1c5ad5f"></script>
+  <script src="js/services/themeManager.js?v=59f4596"></script>
   <!-- Dynamic Meta Tags -->
   <script>
     // Update meta tags based on environment
@@ -186,7 +186,11 @@
   <div class="container">
     <header>
       <div class="logo-container">
-        <img src="assets/logo.svg" alt="One-Host" class="logo">
+        <picture>
+          <!-- Static logo when the device asks for reduced motion -->
+          <source srcset="assets/logo.svg" media="(prefers-reduced-motion: reduce)">
+          <img src="assets/logo-animated.gif" alt="One-Host" class="logo">
+        </picture>
       </div>
       
       <div id="browser-support" class="hidden warning">
@@ -304,6 +308,6 @@
 
     <div id="notifications" class="notifications"></div>
   </div>
-  <script src="script.js?v=1c5ad5f"></script>
+  <script src="script.js?v=59f4596"></script>
 </body>
 </html>

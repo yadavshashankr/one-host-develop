@@ -158,6 +158,32 @@ header {
     }
 }
 
+/* Let the logo size against .logo-container, not the <picture> wrapper,
+   so max-width: 90% doesn't squash it */
+.logo-container picture {
+    display: contents;
+}
+
+/* Animated logo (assets/logo-animated.gif) has less padding than logo.svg,
+   so it's shown about 17% shorter to match the static logo's visual size */
+@media (prefers-reduced-motion: no-preference) {
+    .logo {
+        height: 66px;
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) and (max-width: 768px) {
+    .logo {
+        height: 50px;
+    }
+}
+
+@media (prefers-reduced-motion: no-preference) and (max-width: 480px) {
+    .logo {
+        height: 42px;
+    }
+}
+
 /* Social Media Icons */
 .social-media-container {
     position: fixed;

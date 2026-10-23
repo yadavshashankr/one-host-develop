@@ -139,6 +139,11 @@ class ThemeManager {
 
         this.animateThemeChange(() => this.applyTheme());
 
+        // Only fired for taps on the switch (e.g. to replay the logo animation)
+        window.dispatchEvent(new CustomEvent('themetoggle', {
+            detail: { theme: nextTheme }
+        }));
+
         if (typeof Analytics !== 'undefined') {
             Analytics.track('theme_changed', {
                 theme: nextTheme,
