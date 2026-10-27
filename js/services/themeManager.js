@@ -1,8 +1,9 @@
 // Theme Manager Service
 // Dark mode switch in the social media menu. Follows the device's
-// prefers-color-scheme setting until the user flips the switch; the flipped
-// choice is remembered. Flipping back to whatever the device uses clears the
-// saved choice, so the page follows the device again.
+// prefers-color-scheme setting until the user flips the switch. The flipped
+// choice is kept in sessionStorage, so it lasts through refreshes of that tab
+// only; every new tab starts from the device setting again. Flipping back to
+// whatever the device uses clears the saved choice.
 // The saved choice is applied early by an inline script in index.html's <head>
 // to avoid a flash of the wrong theme.
 
@@ -112,7 +113,9 @@ class ThemeManager {
 
     getSavedTheme() {
         try {
-            const saved = localStorage.getItem(this.STORAGE_KEY);
+            // Older versions saved the choice for all tabs; drop it so new tabs follow the device
+            localStorage.removeItem(this.STORAGE_KEY);
+            const saved = sessionStorage.getItem(this.STORAGE_KEY);
             if (saved === 'light' || saved === 'dark') {
                 return saved;
             }
@@ -129,9 +132,9 @@ class ThemeManager {
 
         try {
             if (this.savedTheme) {
-                localStorage.setItem(this.STORAGE_KEY, this.savedTheme);
+                sessionStorage.setItem(this.STORAGE_KEY, this.savedTheme);
             } else {
-                localStorage.removeItem(this.STORAGE_KEY);
+                sessionStorage.removeItem(this.STORAGE_KEY);
             }
         } catch (error) {
             console.debug('Theme preference not saved:', error);

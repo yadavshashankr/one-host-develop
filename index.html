@@ -60,7 +60,8 @@
   <!-- Apply saved theme before styles load to avoid a flash (see js/services/themeManager.js) -->
   <script>
     try {
-      var savedTheme = localStorage.getItem('one-host-theme');
+      // Per-tab choice only; new tabs follow the device setting
+      var savedTheme = sessionStorage.getItem('one-host-theme');
       if (savedTheme === 'light' || savedTheme === 'dark') {
         document.documentElement.setAttribute('data-theme', savedTheme);
       }
