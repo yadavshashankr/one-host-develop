@@ -4081,6 +4081,9 @@ function toggleFileGroup(type, peerId = null) {
         
         // Insert after header
         header.parentNode.insertBefore(content, header.nextSibling);
+    } else if (header.nextElementSibling !== content) {
+        // Keep the list directly under its own header (headers can be reordered)
+        header.after(content);
     }
     
     if (newExpanded) {
@@ -4456,9 +4459,14 @@ function renderAllFileGroups() {
                     // Find current first header in DOM
                     const currentFirstElement = receivedList.parentNode.querySelector('.file-group-header[data-group-type="received"]');
                     
-                    // Move to top if not already first
+                    // Move to top if not already first, taking its file list along
+                    // (otherwise the list stays under another peer's header and expands there)
                     if (currentFirstElement && currentFirstElement !== firstHeader) {
+                        const firstContent = document.getElementById(`received-files-group-content-${currentFirstPeer}`);
                         receivedList.parentNode.insertBefore(firstHeader, currentFirstElement);
+                        if (firstContent) {
+                            firstHeader.after(firstContent);
+                        }
                     }
                     
                     scrollHeaderToCenter(firstHeaderId);
