@@ -59,6 +59,12 @@ function updateIndexHtml(versionHash) {
             {
                 pattern: /(<script[^>]*src=["'])(script\.js)(\?v=[\w\d]+)?(["'][^>]*>)/gi,
                 replacement: `$1$2?v=${versionHash}$4`
+            },
+            // Images under assets/ (logo GIF and SVG, tab icons, social icons) in src, srcset or href,
+            // so browsers don't keep showing an old logo after a deploy
+            {
+                pattern: /((?:src|srcset|href)=["'])(assets\/[\w\-\/.]+\.(?:gif|svg|png|webp|jpe?g))(\?v=[\w\d]+)?(["'])/gi,
+                replacement: `$1$2?v=${versionHash}$4`
             }
         ];
         
