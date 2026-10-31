@@ -1739,7 +1739,7 @@ async function requestBlobFromPeer(fileInfo) {
 // The receiver asks the original sender for a preview; the sender builds a small one from its
 // own copy (filePreview.createPreview) and sends only that. Senders on an older version don't
 // answer, so the request times out and the receiver shows "Preview unavailable".
-const PREVIEW_REQUEST_TIMEOUT = 20000;
+const PREVIEW_REQUEST_TIMEOUT = 30000; // The sender may first need to load a document reader
 const pendingPreviewRequests = new Map(); // requestId -> { resolve, reject, timer }
 
 // Open connection to the peer that originally shared a file, connecting directly if needed
@@ -1795,7 +1795,8 @@ async function requestPreviewFromPeer(fileInfo, part = {}, signal = null) {
             fileId: fileInfo.id,
             fileName: fileInfo.name,
             fileType: fileInfo.type,
-            offset: Number(part.offset) || 0
+            offset: Number(part.offset) || 0,
+            page: Number(part.page) || 1
         });
     });
 }
@@ -1824,7 +1825,8 @@ async function handlePreviewRequest(data, conn) {
     }
     try {
         const preview = await window.filePreview.createPreview(blob, data.fileName, data.fileType || blob.type, {
-            offset: data.offset
+            offset: data.offset,
+            page: data.page
         });
         reply({ ok: true, preview });
     } catch (error) {
