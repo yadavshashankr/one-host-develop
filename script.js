@@ -1130,6 +1130,12 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                     // Handle direct blob request
                     await handleBlobRequest(data, conn);
                     break;
+                case 'preview-request':
+                    await handlePreviewRequest(data, conn);
+                    break;
+                case 'preview-response':
+                    handlePreviewResponse(data);
+                    break;
                 case 'blob-request-forwarded':
                     // Handle forwarded blob request (host only)
                     await handleForwardedBlobRequest(data, conn);
@@ -1342,6 +1348,7 @@ async function handleFileHeader(data) {
         request.fileData.fileSize = data.fileSize;
         request.fileData.receivedSize = 0;
         request.chunks = [];
+        if (request.onChunk) request.onChunk();
         return; // Don't process as regular file download
     }
     
@@ -1365,6 +1372,7 @@ async function handleFileChunk(data) {
         const request = pendingBlobRequests.get(data.fileId);
         request.chunks.push(data.data);
         request.fileData.receivedSize += data.data.byteLength;
+        if (request.onChunk) request.onChunk();
         return; // Don't process as regular file download
     }
     
@@ -1689,12 +1697,27 @@ async function requestBlobFromPeer(fileInfo) {
                 fileSize: fileInfo.size
             };
 
-            pendingBlobRequests.set(requestId, {
-                resolve,
-                reject,
+            // Give up only when no data has arrived for a while, so big files can take as long as they need
+            const IDLE_TIMEOUT = 60000;
+            let idleTimer = null;
+            const resetIdleTimer = () => {
+                clearTimeout(idleTimer);
+                idleTimer = setTimeout(() => {
+                    if (pendingBlobRequests.get(requestId) === request) {
+                        pendingBlobRequests.delete(requestId);
+                        reject(new Error('Blob request timeout'));
+                    }
+                }, IDLE_TIMEOUT);
+            };
+            const request = {
+                resolve: (blob) => { clearTimeout(idleTimer); resolve(blob); },
+                reject: (error) => { clearTimeout(idleTimer); reject(error); },
                 chunks: fileData.chunks,
-                fileData: fileData
-            });
+                fileData: fileData,
+                onChunk: resetIdleTimer
+            };
+            pendingBlobRequests.set(requestId, request);
+            resetIdleTimer();
 
             // Request the file directly
             conn.send({
@@ -1705,19 +1728,113 @@ async function requestBlobFromPeer(fileInfo) {
                 forZip: true // Flag to indicate this is for ZIP, not direct download
             });
 
-            // Set timeout for blob request
-            setTimeout(() => {
-                if (pendingBlobRequests.has(requestId)) {
-                    pendingBlobRequests.delete(requestId);
-                    reject(new Error('Blob request timeout'));
-                }
-            }, 60000); // 60 second timeout
-
         } catch (error) {
             console.error('Error requesting blob:', error);
             reject(error);
         }
     });
+}
+
+// ---- File previews ----
+// The receiver asks the original sender for a preview; the sender builds a small one from its
+// own copy (filePreview.createPreview) and sends only that. Senders on an older version don't
+// answer, so the request times out and the receiver shows "Preview unavailable".
+const PREVIEW_REQUEST_TIMEOUT = 20000;
+const pendingPreviewRequests = new Map(); // requestId -> { resolve, reject, timer }
+
+// Open connection to the peer that originally shared a file, connecting directly if needed
+async function getSenderConnection(peerId) {
+    let conn = connections.get(peerId);
+    if (conn && conn.open) return conn;
+    conn = peer.connect(peerId, { reliable: true });
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Connection timeout')), 10000);
+        conn.on('open', () => {
+            clearTimeout(timeout);
+            connections.set(peerId, conn);
+            setupConnectionHandlers(conn);
+            resolve();
+        });
+        conn.on('error', (err) => {
+            clearTimeout(timeout);
+            reject(err);
+        });
+    });
+    return conn;
+}
+
+async function requestPreviewFromPeer(fileInfo, part = {}, signal = null) {
+    const conn = await getSenderConnection(fileInfo.sharedBy);
+    if (signal && signal.aborted) throw new DOMException('Preview closed', 'AbortError');
+    const requestId = `${fileInfo.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    return new Promise((resolve, reject) => {
+        const done = () => {
+            clearTimeout(entry.timer);
+            pendingPreviewRequests.delete(requestId);
+            if (signal) signal.removeEventListener('abort', onAbort);
+        };
+        const onAbort = () => {
+            done();
+            reject(new DOMException('Preview closed', 'AbortError'));
+        };
+        const entry = {
+            resolve: (preview) => { done(); resolve(preview); },
+            reject: (error) => { done(); reject(error); },
+            timer: setTimeout(() => {
+                done();
+                reject(new PreviewUnavailableError('The sender didn\'t respond.'));
+            }, PREVIEW_REQUEST_TIMEOUT)
+        };
+        pendingPreviewRequests.set(requestId, entry);
+        if (signal) signal.addEventListener('abort', onAbort);
+
+        conn.send({
+            type: 'preview-request',
+            requestId,
+            fileId: fileInfo.id,
+            fileName: fileInfo.name,
+            fileType: fileInfo.type,
+            offset: Number(part.offset) || 0
+        });
+    });
+}
+
+function handlePreviewResponse(data) {
+    const entry = pendingPreviewRequests.get(data.requestId);
+    if (!entry) return; // Preview was closed or timed out
+    if (data.ok) {
+        entry.resolve(data.preview);
+    } else {
+        // reason is a short message for the viewer (e.g. too large); anything else is only logged
+        const reason = typeof data.reason === 'string' ? data.reason.slice(0, 200) : '';
+        entry.reject(reason ? new PreviewUnavailableError(reason) : new Error(data.error || 'Preview unavailable'));
+    }
+}
+
+// Sender side: build a preview of a file this device shared and send it back
+async function handlePreviewRequest(data, conn) {
+    const reply = (fields) => {
+        if (conn.open) conn.send({ type: 'preview-response', requestId: data.requestId, fileId: data.fileId, ...fields });
+    };
+    const blob = sentFileBlobs.get(data.fileId);
+    if (!blob || !window.filePreview) {
+        reply({ ok: false, error: 'File not available' });
+        return;
+    }
+    try {
+        const preview = await window.filePreview.createPreview(blob, data.fileName, data.fileType || blob.type, {
+            offset: data.offset
+        });
+        reply({ ok: true, preview });
+    } catch (error) {
+        console.warn('Preview not built:', error);
+        reply({
+            ok: false,
+            error: error.message,
+            reason: error instanceof PreviewUnavailableError ? error.message : ''
+        });
+    }
 }
 
 // Function to request and download a blob
@@ -4348,9 +4465,50 @@ function createFileListItem(fileInfo, type) {
     
     li.appendChild(icon);
     li.appendChild(info);
+    const previewBtn = createPreviewButton(fileInfo, type);
+    if (previewBtn) li.appendChild(previewBtn);
     li.appendChild(downloadBtn);
     
     return li;
+}
+
+// Preview button for a file list item, or null when the file type can't be previewed.
+// It doesn't use the icon-button class, which other code uses to find the download button.
+function createPreviewButton(fileInfo, type) {
+    const preview = window.filePreview;
+    if (!preview || !preview.canPreview(fileInfo.name, fileInfo.type)) return null;
+
+    const btn = document.createElement('button');
+    btn.className = 'file-preview-button';
+    btn.title = 'Preview file';
+    btn.setAttribute('aria-label', `Preview ${fileInfo.name}`);
+    btn.innerHTML = '<span class="material-icons" translate="no">visibility</span>';
+    btn.onclick = () => {
+        if (type === 'sent' && sentFileBlobs.has(fileInfo.id)) {
+            const blob = sentFileBlobs.get(fileInfo.id);
+            preview.open(fileInfo, { blob, save: () => downloadBlob(blob, fileInfo.name, fileInfo.id) });
+            return;
+        }
+        // Received: only a small preview built by the sender travels, never the whole file
+        preview.open(fileInfo, {
+            requestPreview: (part, signal) => requestPreviewFromPeer(fileInfo, part, signal),
+            save: () => downloadReceivedFile(fileInfo)
+        });
+    };
+    return btn;
+}
+
+// Download a received file the same way its Download button does (with progress on the button)
+function downloadReceivedFile(fileInfo) {
+    const button = document.querySelector(`li.file-item[data-file-id="${fileInfo.id}"] button.icon-button`);
+    if (button && !button.disabled) {
+        button.click();
+    } else if (!downloadProgressMap.has(fileInfo.id)) {
+        requestAndDownloadBlob(fileInfo).catch(error => {
+            showNotification('Failed to download file: ' + error.message, 'error');
+        });
+    }
+    showNotification(`Downloading ${fileInfo.name}…`, 'info');
 }
 
 // Render all file groups
