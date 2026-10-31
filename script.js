@@ -1136,6 +1136,12 @@ function setupConnectionHandlers(conn, connectionTimeout = null) {
                 case 'preview-response':
                     handlePreviewResponse(data);
                     break;
+                case 'range-request':
+                    await handleRangeRequest(data, conn);
+                    break;
+                case 'range-response':
+                    handleRangeResponse(data);
+                    break;
                 case 'blob-request-forwarded':
                     // Handle forwarded blob request (host only)
                     await handleForwardedBlobRequest(data, conn);
@@ -1836,6 +1842,66 @@ async function handlePreviewRequest(data, conn) {
             error: error.message,
             reason: error instanceof PreviewUnavailableError ? error.message : ''
         });
+    }
+}
+
+// ---- Streaming received video and audio ----
+// The preview's player asks for byte ranges (through stream-sw.js); each range is fetched from
+// the sender here. Only the ranges the player asks for are transferred, never the whole file.
+const RANGE_REQUEST_TIMEOUT = 20000;
+const RANGE_MAX_BYTES = 1024 * 1024; // Largest piece the sender will send in one message
+const pendingRangeRequests = new Map(); // requestId -> { resolve, reject, timer }
+
+async function requestRangeFromPeer(fileInfo, start, end) {
+    const conn = await getSenderConnection(fileInfo.sharedBy);
+    const requestId = `${fileInfo.id}-r${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise((resolve, reject) => {
+        const entry = {
+            resolve: (data) => { clearTimeout(entry.timer); pendingRangeRequests.delete(requestId); resolve(data); },
+            reject: (error) => { clearTimeout(entry.timer); pendingRangeRequests.delete(requestId); reject(error); },
+            timer: setTimeout(() => entry.reject(new Error('The sender did not answer')), RANGE_REQUEST_TIMEOUT)
+        };
+        pendingRangeRequests.set(requestId, entry);
+        conn.send({ type: 'range-request', requestId, fileId: fileInfo.id, start, end });
+    });
+}
+
+async function handleRangeResponse(data) {
+    const entry = pendingRangeRequests.get(data.requestId);
+    if (!entry) return;
+    if (!data.ok || !data.data) {
+        entry.reject(new Error(data.error || 'Range unavailable'));
+        return;
+    }
+    // PeerJS hands large messages over as a typed array or Blob rather than an ArrayBuffer;
+    // the stream worker needs a plain ArrayBuffer of exactly this piece
+    let piece = data.data;
+    if (piece instanceof Blob) piece = await piece.arrayBuffer();
+    else if (ArrayBuffer.isView(piece)) piece = piece.buffer.slice(piece.byteOffset, piece.byteOffset + piece.byteLength);
+    entry.resolve({ data: piece, total: data.total });
+}
+
+// Sender side: send one piece of a file this device shared
+async function handleRangeRequest(data, conn) {
+    const reply = (fields) => {
+        if (conn.open) conn.send({ type: 'range-response', requestId: data.requestId, ...fields });
+    };
+    const blob = sentFileBlobs.get(data.fileId);
+    const start = Math.floor(Number(data.start));
+    const end = Math.floor(Number(data.end));
+    if (!blob) {
+        reply({ ok: false, error: 'File not available' });
+        return;
+    }
+    if (!(start >= 0) || !(end >= start) || start >= blob.size || end - start + 1 > RANGE_MAX_BYTES) {
+        reply({ ok: false, error: 'Invalid range' });
+        return;
+    }
+    try {
+        const piece = await blob.slice(start, Math.min(end, blob.size - 1) + 1).arrayBuffer();
+        reply({ ok: true, data: piece, total: blob.size });
+    } catch (error) {
+        reply({ ok: false, error: error.message });
     }
 }
 
@@ -4494,6 +4560,7 @@ function createPreviewButton(fileInfo, type) {
         // Received: only a small preview built by the sender travels, never the whole file
         preview.open(fileInfo, {
             requestPreview: (part, signal) => requestPreviewFromPeer(fileInfo, part, signal),
+            requestRange: (start, end) => requestRangeFromPeer(fileInfo, start, end),
             save: () => downloadReceivedFile(fileInfo)
         });
     };

@@ -7,8 +7,10 @@
 // a slice of text, PDF pages, sheet rows, a document's text, slides, or an archive's file list.
 // The sender builds it for each request and keeps nothing once it's sent; asking again builds it
 // again. If the sender can't (older version, file too big, unreadable), the overlay shows
-// "Preview unavailable". Received videos and audio will stream; until then they show
-// "Preview unavailable" too. Closing the overlay releases everything the preview held.
+// "Preview unavailable". Received videos and audio stream instead: the player asks stream-sw.js
+// for byte ranges, and each range is fetched from the sender as it's needed. Where streaming
+// can't work, they show "Preview unavailable" and nothing is transferred. Closing the overlay
+// releases everything the preview held.
 //
 // Images and documents zoom by pinch, Ctrl/Cmd + scroll, the +/- keys or the on-screen
 // controls. Video and audio use the browser's own player.
@@ -125,6 +127,78 @@ class FilePreview {
         this.libraries = {}; // name -> Promise of the loaded library
         this.onPopState = this.onPopState.bind(this);
         this.onKeyDown = this.onKeyDown.bind(this);
+        this.streams = new Map(); // streamId -> requestRange(start, end), answered for stream-sw.js
+        this.streamWorkerReady = this.registerStreamWorker();
+    }
+
+    // ---- Streaming (received video and audio) ----
+
+    registerStreamWorker() {
+        if (!('serviceWorker' in navigator) || !window.isSecureContext) return Promise.resolve(false);
+        navigator.serviceWorker.addEventListener('message', (event) => this.onStreamMessage(event));
+        if (navigator.serviceWorker.startMessages) navigator.serviceWorker.startMessages();
+        return navigator.serviceWorker.register('stream-sw.js').then(() => true).catch(error => {
+            // Some in-app browsers and private windows don't allow it; streaming is then unavailable
+            console.warn('Stream worker not registered:', error);
+            return false;
+        });
+    }
+
+    // Resolves true once the stream worker controls this page (it takes over a new page by itself)
+    async ensureStreamWorker() {
+        if (!(await this.streamWorkerReady)) return false;
+        if (navigator.serviceWorker.controller) return true;
+        return new Promise(resolve => {
+            const timer = setTimeout(() => resolve(!!navigator.serviceWorker.controller), 4000);
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+                clearTimeout(timer);
+                resolve(true);
+            }, { once: true });
+        });
+    }
+
+    // The worker asks every open page for a piece; only the page that owns the stream fetches it
+    onStreamMessage(event) {
+        const data = event.data || {};
+        const port = event.ports && event.ports[0];
+        if (data.type !== 'preview-stream-range' || !port) return;
+        const requestRange = this.streams.get(data.streamId);
+        if (!requestRange) {
+            port.postMessage({ ok: false, error: 'Unknown stream' });
+            return;
+        }
+        requestRange(Number(data.start), Number(data.end)).then(piece => {
+            if (!this.streams.has(data.streamId)) throw new Error('Stream closed');
+            port.postMessage({ ok: true, data: piece.data, total: piece.total }, [piece.data]);
+        }).catch(error => {
+            port.postMessage({ ok: false, error: error.message });
+        });
+    }
+
+    async streamMedia(tag, requestRange) {
+        const session = this.session;
+        const { fileInfo } = session;
+        let mime = this.getMimeType(fileInfo.name, fileInfo.type);
+        // Formats this browser says it can't play are never transferred. QuickTime files are
+        // usually MP4 inside, so they're offered to the player as MP4 and tried.
+        if (/quicktime/.test(mime)) mime = 'video/mp4';
+        if (!document.createElement(tag).canPlayType(mime)) {
+            this.showUnavailable(`This browser can't play this ${tag} format.`);
+            return;
+        }
+        this.showLoading();
+        const ready = await this.ensureStreamWorker();
+        if (this.session !== session) return;
+        if (!ready) {
+            this.showUnavailable(`This browser can't stream the ${tag}. Opening One-Host in Safari or Chrome may work.`);
+            return;
+        }
+        const streamId = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+        this.streams.set(streamId, requestRange);
+        session.streamId = streamId;
+        const src = `__preview-stream/${streamId}/${encodeURIComponent(fileInfo.name)}` +
+            `?size=${fileInfo.size}&type=${encodeURIComponent(mime)}`;
+        this.renderMediaSource(src, tag, true);
     }
 
     // 'image', 'video', 'audio', 'text', 'archive', 'pdf', 'sheet', 'document', 'slides',
@@ -851,9 +925,11 @@ class FilePreview {
      * @param {(part, signal) => Promise<object>} [options.requestPreview] - Asks the sender of a
      *     received file for a preview (see createPreview); part is { offset } for more text
      *     or { page } for a PDF page
+     * @param {(start, end) => Promise<{data, total}>} [options.requestRange] - Fetches a byte range
+     *     of a received file from its sender, for streaming video and audio
      * @param {() => void} [options.save] - Downloads the file
      */
-    open(fileInfo, { blob = null, requestPreview = null, save = null } = {}) {
+    open(fileInfo, { blob = null, requestPreview = null, requestRange = null, save = null } = {}) {
         // Opening over another preview reuses its history entry
         this.close({ keepHistory: true });
         this.build();
@@ -900,9 +976,10 @@ class FilePreview {
             return;
         }
         if (kind === 'video' || kind === 'audio') {
-            // Sent: play this device's own copy. Received: streaming will come; nothing is transferred
+            // Sent: play this device's own copy. Received: stream it from the sender
             if (blob) this.renderMedia(blob, kind);
-            else this.showUnavailable(`This ${kind} can't be played here yet.`);
+            else if (requestRange) this.streamMedia(kind, requestRange);
+            else this.showUnavailable(`This ${kind} can't be played here.`);
             return;
         }
         if (!loadPart) {
@@ -927,12 +1004,17 @@ class FilePreview {
         this.session = null;
         session.controller.abort();
         if (session.observer) session.observer.disconnect();
+        if (session.streamId) this.streams.delete(session.streamId); // Pieces still asked for are refused
         session.urls.forEach(url => URL.revokeObjectURL(url));
 
         if (document.fullscreenElement && this.overlay.contains(document.fullscreenElement)) {
             document.exitFullscreen().catch(() => {});
         }
-        this.stage.querySelectorAll('video, audio').forEach(media => media.pause());
+        this.stage.querySelectorAll('video, audio').forEach(media => {
+            media.pause();
+            media.removeAttribute('src'); // Stops the player loading any more
+            media.load();
+        });
         this.stage.replaceChildren();
         this.overlay.hidden = true;
         document.body.classList.remove('preview-open');
@@ -1117,6 +1199,10 @@ class FilePreview {
 
     renderMedia(blob, tag) {
         const mime = this.getMimeType(this.session.fileInfo.name, blob.type);
+        this.renderMediaSource(this.trackUrl(mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob), tag, false);
+    }
+
+    renderMediaSource(src, tag, streamed) {
         const media = document.createElement(tag);
         media.className = `preview-${tag}`;
         media.controls = true;
@@ -1126,11 +1212,15 @@ class FilePreview {
             media.setAttribute('webkit-playsinline', '');
         }
         media.addEventListener('error', () => {
-            if (this.session && this.stage.contains(media)) {
-                this.showUnavailable(`This browser can't play this ${tag} format.`);
-            }
+            if (!this.session || !this.stage.contains(media)) return;
+            if (this.session.streamId) this.streams.delete(this.session.streamId); // Stop serving it
+            // A network error while streaming means the sender stopped answering
+            const network = streamed && media.error && media.error.code === MediaError.MEDIA_ERR_NETWORK;
+            this.showUnavailable(network
+                ? `The ${tag} stopped streaming. The sender may have disconnected.`
+                : `This browser can't play this ${tag} format.`);
         });
-        media.src = this.trackUrl(mime && blob.type !== mime ? new Blob([blob], { type: mime }) : blob);
+        media.src = src;
 
         const wrapper = document.createElement('div');
         wrapper.className = `preview-media preview-media-${tag}`;
